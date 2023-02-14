@@ -28,8 +28,8 @@ private:
     static const int MAX_FD = 65536;
     static const int MAX_EVENT_NUMBER = 30000;
     bool stop_server_;
-    std::string listen_ip_;                             // IP
-    int listen_port_;                                   // 端口
+    const std::string listen_ip_;                       // IP
+    const int listen_port_;                             // 端口
     int listen_fd_;                                     // 监听端口文件描述符
     // int signal_fd_[2];                               // 用来接收中断的
     int epoll_fd_;                                      // 事件指针

@@ -1,17 +1,20 @@
 CFLAGS = -std=c++11 -O2 -Wall -g 
 
-TARGET = webServer
-# OBJS = main.cpp Server/*.cpp HttpConn/*.cpp Timer/*.cpp
-# HS = Server/*.h HttpConn/*.h ThreadPool/*.h Timer/*.h
-DIR = Server HttpConn ThreadPool Timer
-SOURCE_CPP = Server/Server.cpp HttpConn/HttpConn.cpp Timer/Timer.cpp
-SOURCE_H = Server/Server.h HttpConn/HttpConn.h ThreadPool/ThreadPool.h\
-	Timer/Timer.h
+.PHONY: webServer, clean
 
-.PHONY: all, clean
+webServer: main.cpp bin/Server.o bin/HttpConn.o bin/Timer.o ThreadPool/ThreadPool.h
+	g++ $(CFLAGS) -o $@ main.cpp bin/Server.o bin/HttpConn.o bin/Timer.o \
+		ThreadPool/ThreadPool.h -lpthread
 
-all: $(OBJS)
-	g++ $(CFLAGS) -o $(TARGET) main.cpp $(SOURCE_CPP) $(SOURCE_H) -pthread
+bin/Server.o: Server/Server.cpp Server/Server.h
+	g++ $(CFLAGS) -c -o $@ Server/Server.cpp
+
+bin/HttpConn.o: HttpConn/HttpConn.cpp HttpConn/HttpConn.h
+	g++ $(CFLAGS) -c -o $@ HttpConn/HttpConn.cpp
+
+bin/Timer.o: Timer/Timer.cpp Timer/Timer.h
+	g++ $(CFLAGS) -c -o $@ Timer/Timer.cpp
 
 clean:
-	rm -rf $(TARGET)
+	rm -rf webServer
+	rm -rf bin/*

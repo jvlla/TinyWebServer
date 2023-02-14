@@ -8,16 +8,21 @@
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 #include "Server.h"
+#include "../HttpConn/HttpConn.h"
 using namespace std;
 
 #include <iostream>
+#include <cstdio>
 
-int setnonblocking(int fd);
-void addfd(int epollfd, int fd);
+extern int setnonblocking(int fd);
+extern void addfd(int epollfd, int fd);
 
 Server::Server(string listen_ip, int listen_port, int time_out_ms)
         : listen_ip_(listen_ip), listen_port_(listen_port)
-        , time_out_ms_(time_out_ms), stop_server_(false) {cout << "in" << endl;}
+        , time_out_ms_(time_out_ms) 
+{
+    stop_server_ = false;
+}
 
 Server::~Server()
 {
@@ -30,19 +35,19 @@ Server::~Server()
 void Server::run()
 {
     listen_fd_ = socket(PF_INET, SOCK_STREAM, 0);
-    assert(this->listen_fd_ > 0);
+    assert(listen_fd_ > 0);
     struct linger tmp = {1, 0};
     setsockopt(listen_fd_, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
 
+    int ret = 0;
     struct sockaddr_in address;
     bzero(&address, sizeof(address));
     address.sin_family = AF_INET;
-    inet_pton(AF_INET, listen_ip_.data(), &address.sin_addr);
-    address.sin_port = listen_port_;
+    inet_pton(AF_INET, listen_ip_.c_str(), &address.sin_addr);
+    address.sin_port = htons(listen_port_);
 
-    int ret = 0;
-    ret = bind(listen_fd_, (struct sockaddr *) &address, sizeof(address));
-    assert(ret >= 0);
+    ret = bind(listen_fd_, (struct sockaddr *)&address, sizeof(address));
+    assert(ret >= 0); 
 
     ret = listen(listen_fd_, 5);
     assert(ret >= 0);
@@ -50,6 +55,7 @@ void Server::run()
     epoll_fd_ = epoll_create(5);
     assert(epoll_fd_ > 0);
     addfd(epoll_fd_, listen_fd_);
+    HttpConn::epoll_fd_ = epoll_fd_;
 
     // ret = socketpair(PF_UNIX, SOCK_STREAM, 0, signal_fd_);
     // assert(ret != -1);
@@ -76,19 +82,28 @@ void Server::run()
             int fd = epoll_events_[i].data.fd;
             if (fd == listen_fd_)
             {
-
+                struct sockaddr_in client_address;
+                socklen_t client_addrlength = sizeof(client_address);
+                int conn_fd = accept(listen_fd_
+                    , (struct sockaddr *) &client_address, &client_addrlength);
+                if (conn_fd < 0)
+                {
+                    printf("errno is: %d\n", errno);
+                    continue;
+                }
+                connections[conn_fd].init(conn_fd, client_address);
             }
             else if (epoll_events_[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR))
             {
-                // connections[fd].close();
+                // connections[fd].close_conn();
             }
             else if (epoll_events_[i].events & EPOLLIN)
             {
-
+                printf("read and process\n");
+                connections[fd].read_and_process();
             }
             else if (epoll_events_[i].events & EPOLLOUT)
             {
-
             }
         }
     }
@@ -112,20 +127,3 @@ void Server::run()
 //     sigfillset(&sa.sa_mask);
 //     assert(sigaction(sig, &sa, NULL) != -1);
 // }
-
-int setnonblocking(int fd)
-{
-    int old_option = fcntl(fd, F_GETFL);
-    int new_option = old_option | O_NONBLOCK;
-    fcntl(fd, F_SETFL, new_option);
-    return old_option;
-}
-
-void addfd(int epollfd, int fd)
-{
-    epoll_event event;
-    event.data.fd = fd;
-    event.events = EPOLLIN | EPOLLET | EPOLLRDHUP | EPOLLONESHOT;
-    epoll_ctl( epollfd, EPOLL_CTL_ADD, fd, &event );
-    setnonblocking( fd );
-}
