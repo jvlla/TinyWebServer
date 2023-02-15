@@ -99,11 +99,14 @@ void Server::run()
             }
             else if (epoll_events_[i].events & EPOLLIN)
             {
+                printf("%d in\n", fd);
                 printf("read and process\n");
                 connections[fd].read_and_process();
             }
             else if (epoll_events_[i].events & EPOLLOUT)
             {
+                printf("%d out\n", fd);
+                connections[fd].write();
             }
         }
     }

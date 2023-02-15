@@ -1,4 +1,4 @@
-CFLAGS = -std=c++11 -O2 -Wall -g 
+CFLAGS = -std=c++11 -O1 -Wall -g 
 
 .PHONY: webServer, clean
 
