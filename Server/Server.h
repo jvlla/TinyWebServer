@@ -12,7 +12,8 @@
 
 class Server {
 public:
-    Server(std::string listen_ip, int listen_port, int time_out_ms);
+    Server(std::string listen_ip, int listen_port, std::string path_resources
+        , int time_out_ms);
     ~Server();
     /* 服务器运行，循环监听事件 */ 
     void run();
@@ -36,7 +37,7 @@ private:
     std::shared_ptr<ThreadPool<HttpConn>> thread_pool_; // 线程池指针
     Timer<HttpConn> timer_;                             // 定时器指针
     int time_out_ms_;                                   // 定时器间隔，以毫秒为单位
-    std::string root_dict_;                             // 资源路径
+    std::string path_resource_;                        // 资源路径
     std::unordered_map<int, HttpConn> connections;      // http连接
     epoll_event epoll_events_[MAX_EVENT_NUMBER];        // epoll监听事件
     // 后面还得有和数据库相关的

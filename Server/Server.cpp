@@ -16,11 +16,12 @@ using namespace std;
 
 extern int setnonblocking(int fd);
 extern void addfd(int epollfd, int fd);
+extern void modfd(int epollfd, int fd, int ev);
 
-Server::Server(string listen_ip, int listen_port, int time_out_ms)
-        : listen_ip_(listen_ip), listen_port_(listen_port)
-        , time_out_ms_(time_out_ms) 
+Server::Server(string listen_ip, int listen_port, string path_resource, int time_out_ms)
+        : listen_ip_(listen_ip), listen_port_(listen_port), time_out_ms_(time_out_ms) 
 {
+    path_resource_ = path_resource;
     stop_server_ = false;
 }
 
@@ -55,6 +56,7 @@ void Server::run()
     epoll_fd_ = epoll_create(5);
     assert(epoll_fd_ > 0);
     addfd(epoll_fd_, listen_fd_);
+    /* 设置HttpConn类的epoll事件文件描述符 */
     HttpConn::epoll_fd_ = epoll_fd_;
 
     // ret = socketpair(PF_UNIX, SOCK_STREAM, 0, signal_fd_);
@@ -70,6 +72,7 @@ void Server::run()
 
     while(!stop_server_)
     {
+        cout << "wait epoll" << endl;
         int number = epoll_wait(epoll_fd_, epoll_events_, MAX_EVENT_NUMBER, -1);
         if (number < 0 && errno != EAGAIN)
         {
@@ -82,6 +85,8 @@ void Server::run()
             int fd = epoll_events_[i].data.fd;
             if (fd == listen_fd_)
             {
+
+                cout << "get listen" << endl;
                 struct sockaddr_in client_address;
                 socklen_t client_addrlength = sizeof(client_address);
                 int conn_fd = accept(listen_fd_
@@ -91,11 +96,11 @@ void Server::run()
                     printf("errno is: %d\n", errno);
                     continue;
                 }
-                connections[conn_fd].init(conn_fd, client_address);
+                connections[conn_fd].init(conn_fd, client_address, path_resource_);
             }
             else if (epoll_events_[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR))
             {
-                // connections[fd].close_conn();
+                connections[fd].close_conn();
             }
             else if (epoll_events_[i].events & EPOLLIN)
             {
@@ -109,6 +114,7 @@ void Server::run()
                 connections[fd].write();
             }
         }
+        modfd(epoll_fd_, listen_fd_, EPOLLIN);
     }
 }
 

@@ -2,72 +2,65 @@
 #include <iostream>
 
 #include <string>
+#include <vector>
 #include <algorithm>
 #include <regex>
+#include <cstdlib>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
-#include <fcntl.h>
 #include <sys/epoll.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include "HttpConn.h"
 using namespace std;
 
-int setnonblocking(int fd)
-{
-    int old_option = fcntl(fd, F_GETFL);
-    int new_option = old_option | O_NONBLOCK;
-    fcntl(fd, F_SETFL, new_option);
-    return old_option;
-}
+void addfd(int epollfd, int fd);
+void removefd(int epollfd, int fd);
+void modfd(int epollfd, int fd, int ev);
 
-void addfd(int epollfd, int fd)
-{
-    epoll_event event;
-    event.data.fd = fd;
-    event.events = EPOLLIN | EPOLLET | EPOLLRDHUP | EPOLLONESHOT;
-    epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
-    setnonblocking(fd);
-}
-
-void removefd( int epollfd, int fd )
-{
-    epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, 0);
-    close(fd);
-}
-
-void modfd( int epollfd, int fd, int ev )
-{
-    epoll_event event;
-    event.data.fd = fd;
-    event.events = ev | EPOLLET | EPOLLONESHOT | EPOLLRDHUP;
-    epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);
-}
-
-/* static成员变量epoll_fd_在类定义外进行初始化 */
+/* static成员变量在类定义外进行初始化 */
 int HttpConn::epoll_fd_ = -1;
+const unordered_map<enum HttpConn::HTTP_CODE, string> HttpConn::RESPONSE_ERROR_CODE_TO_CONTENT = {
+    {BAD_REQUEST_400, "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Bad Request</title></head>" \
+        "<body><p><b>Your request has bad syntax or is inherently impossible to satisfy.\n</b></p></body></html>"},
+    {FORBIDDEN_403, "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Forbidden</title></head>" \
+        "<body><p><b>You do not have permission to get file from this server.\n</b></p></body></html>"},
+    {NOT_FOUND_404, "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Not Found</title></head>" \
+        "<body><p><b>The requested file was not found on this server.\n</b></p></body></html>"},
+    {INTERNAL_SERVER_ERROR_500, "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Internal Error</title></head>" \
+        "<body><p><b>There was an unusual problem serving the requested file.\n</b></p></body></html>"},
+};
 
 HttpConn::HttpConn()
 {
     socket_fd_ = -1;
     address_ = {0};
-    is_keep_alive_ = false;
+    is_linger = false;
     read_buffer_.resize(READ_BUFFER_SIZE);
     read_buffer_.resize(WRITE_BUFFER_SIZE);
     check_state_ = CHECK_REQUEST_LINE;
     response_code_ = OK_200;
 }
 
-void HttpConn::init(int fd, sockaddr_in address)
+void HttpConn::init(int fd, sockaddr_in address, string path_resource)
 {
+    cout << "in init" << endl;
     socket_fd_ = fd;
     address_ = address;
+    path_resource_ = path_resource;
     /* 允许端口复用 */
     int error = 0;
     socklen_t len = sizeof( error );
     getsockopt(socket_fd_, SOL_SOCKET, SO_ERROR, &error, &len);
     int reuse = 1;
     setsockopt(socket_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    //-------------------------照着人家继续完善---------------------------
     /* 将socket文件描述符加入epoll事件表 */
     addfd(epoll_fd_, socket_fd_);
+    /* 将响应报文发送文件stat结构体置零，避免使用socket时出错 */
+    memset(&response_file_stat_, 0, sizeof(response_file_stat_));
+    cout << "after init" << endl;
 }
 
 void HttpConn::close_conn()
@@ -77,6 +70,14 @@ void HttpConn::close_conn()
         removefd(epoll_fd_, socket_fd_);
         socket_fd_ = -1;
     }
+}
+
+void HttpConn::clear_conn()
+{
+    //------------------------先这样，等完善----------------------------
+    response_file_ = nullptr;
+    memset(&response_file_stat_, 0, sizeof(response_file_stat_));
+    is_linger = false;
 }
 
 /* 首先先读取一部分，然后靠查找\r\n\r\n找到content开始的部分，拷贝到打开的mmap地址。
@@ -107,26 +108,64 @@ bool HttpConn::read()
 
 void HttpConn::write()
 {
-    cout << "in write()" << endl;
-    string out(write_buffer_.begin(), write_buffer_.end());
-    cout << out << endl;
-    int temp = writev(socket_fd_, iv_, iv_count_);
-    cout << temp << endl;
+    int bytes_to_send;
+
+    bytes_to_send = write_buffer_.size();
+    if (response_code_ == OK_200)
+        bytes_to_send += response_file_stat_.st_size;
+    printf("all to send: %d\n", bytes_to_send);
+    while (true)
+    {
+        int bytes_sended = writev(socket_fd_, iv_, iv_count_);
+        if (bytes_sended <= -1)
+        {
+            /* 如果错误为EAGAIN，重复设置EPOLLOUT事件等待触发 */
+            if (errno == EAGAIN)
+                modfd(epoll_fd_, socket_fd_, EPOLLOUT);
+            /* 否则说明出错，关闭连接 */
+            else
+            {
+                unmap_file();
+                close_conn();
+            }
+            return;
+        }
+
+        bytes_to_send -= bytes_sended;
+        printf("send %d, left %d\n", bytes_sended, bytes_to_send);
+        /* 如果发送完全*/
+        if (bytes_to_send <= 0)
+        {
+            unmap_file();
+            if (is_linger)
+            {
+                cout << "is linger, reset epollin" << endl;
+                modfd(epoll_fd_, socket_fd_, EPOLLIN);
+                clear_conn();
+            }
+            else
+                close_conn();
+            return;
+        }
+    }
 }
 
 void HttpConn::read_and_process()
 {
-    /* 如果未完全 */
+    /* 如果未完全读入请求报文，等待下次RPOLLIN事件，继续调用read()函数 */
     if (!read())
         return;
     
-    //-----------------------------------------------------
-    // switch(process_read())
-    response_code_ = NOT_FOUND_404;
-    switch(READ_ERROR)
+    cout << "after read" << endl;
+    switch(process_read())
     {
+        //----------------这个如果404,403什么的，不知道传个o的iovec行不行-----------------
         case READ_COMPLETE:
-            process_file();
+            cout << "read_complete" << endl;
+            cout << response_code_ << endl;
+            iv_count_ = 2;
+            response_code_ = process_file();
+            cout << response_code_ << endl;
             process_write();
             break;
         /* 如果调用process_read()函数中出错，响应报文不需要content */
@@ -134,7 +173,7 @@ void HttpConn::read_and_process()
             iv_count_ = 1;
             process_write();
             break;
-        /* read_state状态出错，设置http状态码500 */
+        /* read_state_状态出错，设置http状态码500 */
         default:
             response_code_ = INTERNAL_SERVER_ERROR_500;
             iv_count_ = 1;
@@ -178,7 +217,7 @@ enum HttpConn::READ_STATE HttpConn::process_read()
             case CHECK_CONTENT:
                 read_state = parse_content();
                 break;
-            /* CHECK_STATE状态出错，设置http状态码500 */
+            /* check_state_状态出错，设置http状态码500 */
             default:
                 read_state = READ_ERROR;
                 response_code_ = INTERNAL_SERVER_ERROR_500;
@@ -252,7 +291,7 @@ enum HttpConn::READ_STATE HttpConn::parse_request_line(std::string &line)
     else
         is_legal = false;
 
-    check_state_ = CHECK_HEADER;  // CHECK_STATE状态转移
+    check_state_ = CHECK_HEADER;  // check_state_状态转移
     /* 当请求行合法时，继续处理，否则停止处理，返回http400报文 */
     if (is_legal)
         return READ_INCOMPLETE;  // READ_STATE状态转移
@@ -277,7 +316,14 @@ enum HttpConn::READ_STATE HttpConn::parse_header(std::string &line)
         if (field == "Host")
             request_host_ = value;
         else if (field == "Connection")
-            is_keep_alive_ = true;
+        {
+            if (value == "keep-alive")
+                is_linger = true;
+            else if (value == "close")
+                is_linger = false;
+            else
+                is_legal = false;
+        }   
         else if (field == "User-Agent")
             request_user_agent_ = value;
         else if (field == "Content-Length")  // Content-Length在read()中已处理
@@ -320,21 +366,56 @@ enum HttpConn::READ_STATE HttpConn::parse_content()
     return READ_COMPLETE;
 }
 
-void HttpConn::process_file()
+enum HttpConn::HTTP_CODE HttpConn::process_file()
 {
+    if (response_code_ != OK_200)
+        return response_code_;
+    string path_file;
+    char path[1000];
+    int fd;
 
+    /* 处理文件名 */
+    if (!getcwd(path, sizeof(path)))
+        return INTERNAL_SERVER_ERROR_500;
+    path_file = path;
+    if (request_url_ == "/")
+        path_file += path_resource_ + "/welcome.html";
+    else
+        path_file += path_resource_ + request_url_;
+    printf("%s\n", path_file.data());
+
+    /* 处理错误情况 */
+    if (stat(path_file.data(), &response_file_stat_) < 0)
+    {
+        cout << "in 404" << endl;
+        return NOT_FOUND_404;
+    }
+    if (!(response_file_stat_.st_mode & S_IROTH))
+        return FORBIDDEN_403;
+    if (S_ISDIR(response_file_stat_.st_mode))
+        return BAD_REQUEST_400;
+    
+    /* 进行文件映射 */
+    fd = open(path_file.data(), O_RDONLY);
+    response_file_ = (char *) mmap(0, response_file_stat_.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    return OK_200;
 }
 
 void HttpConn::process_write()
 {
     add_response_status_line();
     add_response_header();
-    if (response_code_ != OK_200)
-    {
-
-    }
     iv_[0].iov_base = write_buffer_.data(); 
     iv_[0].iov_len = write_buffer_.size();
+    if (response_code_ == OK_200)
+    {
+        cout << "in add file" << endl;
+        cout << "file size: " << response_file_stat_.st_size << endl;
+
+        iv_[1].iov_base = response_file_; 
+        iv_[1].iov_len = response_file_stat_.st_size;
+    }
 }
 
 void HttpConn::add_response_status_line()
@@ -359,11 +440,11 @@ void HttpConn::add_response_status_line()
         case INTERNAL_SERVER_ERROR_500:
             status += "500 Internal Server Error";
             break;
-        /* RESPONSE_CODE状态出错，默认http 500 */
+        /* response_code_状态出错，默认http 500 */
         default:
             status += "500 Internal Server Error";
     }
-    write_buffer_.insert(write_buffer_.end(), status.begin(), status.end());
+    add_to_response(status);
     add_response_crlf();
 }
 
@@ -372,30 +453,86 @@ void HttpConn::add_response_header()
     add_response_content_length();
     add_response_linger();
     add_response_crlf();
-    //-----------------------------------------------------------------
-    string content = "404 Not Found";
-    write_buffer_.insert(write_buffer_.end(), content.begin(), content.end());
+    if (response_code_ != OK_200)
+        add_response_error_content();
 }
 
 void HttpConn::add_response_content_length()
 {
-    // ----------------------------先凑合一下----------------------
-    string length = "Content-Length: 13";
-    write_buffer_.insert(write_buffer_.end(), length.begin(), length.end());
+    string content_length = "Content-Length: ";
+
+    if (response_code_ == OK_200)
+        content_length += response_file_stat_.st_size;
+    else
+        content_length += RESPONSE_ERROR_CODE_TO_CONTENT.at(response_code_).size();
+    add_to_response(content_length);
     add_response_crlf();
 }
 
 void HttpConn::add_response_linger()
 {
-    string connection = "Connection: ";
+    string linger;
 
-    connection += (is_keep_alive_ == true ) ? "keep-alive" : "close";
-    write_buffer_.insert(write_buffer_.end(), connection.begin(), connection.end());
+    linger = "Connection: ";
+    if (is_linger && response_code_ == OK_200)
+        linger += "keep-alive";
+    else
+        linger += "close";
+    add_to_response(linger);
     add_response_crlf();
 }
 
 void HttpConn::add_response_crlf()
 {
-    write_buffer_.push_back('\r');
-    write_buffer_.push_back('\n');
+    HttpConn::add_to_response("\r\n");
+}
+
+void HttpConn::add_response_error_content()
+{
+    add_to_response(RESPONSE_ERROR_CODE_TO_CONTENT.at(response_code_));
+}
+
+void HttpConn::add_to_response(std::string str)
+{
+    write_buffer_.insert(write_buffer_.end(), str.begin(), str.end());
+}
+
+void HttpConn::unmap_file()
+{
+    if(response_file_)
+    {
+        munmap(response_file_, response_file_stat_.st_size);
+        response_file_ = 0;
+    }
+}
+
+int setnonblocking(int fd)
+{
+    int old_option = fcntl(fd, F_GETFL);
+    int new_option = old_option | O_NONBLOCK;
+    fcntl(fd, F_SETFL, new_option);
+    return old_option;
+}
+
+void addfd(int epollfd, int fd)
+{
+    epoll_event event;
+    event.data.fd = fd;
+    event.events = EPOLLIN | EPOLLET | EPOLLRDHUP | EPOLLONESHOT;
+    epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
+    setnonblocking(fd);
+}
+
+void removefd(int epollfd, int fd)
+{
+    epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, 0);
+    close(fd);
+}
+
+void modfd(int epollfd, int fd, int ev)
+{
+    epoll_event event;
+    event.data.fd = fd;
+    event.events = ev | EPOLLET | EPOLLONESHOT | EPOLLRDHUP;
+    epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);
 }
