@@ -36,11 +36,6 @@ HttpConn::HttpConn()
 {
     socket_fd_ = -1;
     address_ = {0};
-    is_linger = false;
-    read_buffer_.resize(READ_BUFFER_SIZE);
-    read_buffer_.resize(WRITE_BUFFER_SIZE);
-    check_state_ = CHECK_REQUEST_LINE;
-    response_code_ = OK_200;
 }
 
 void HttpConn::init(int fd, sockaddr_in address, string path_resource)
@@ -61,6 +56,17 @@ void HttpConn::init(int fd, sockaddr_in address, string path_resource)
     /* 将响应报文发送文件stat结构体置零，避免使用socket时出错 */
     memset(&response_file_stat_, 0, sizeof(response_file_stat_));
     cout << "after init" << endl;
+    init();
+}
+
+void HttpConn::init()
+{
+    is_linger = false;
+    read_buffer_.resize(READ_BUFFER_SIZE);
+    response_file_ = nullptr;
+    memset(&response_file_stat_, 0, sizeof(response_file_stat_));
+    check_state_ = CHECK_REQUEST_LINE;
+    response_code_ = OK_200;
 }
 
 void HttpConn::close_conn()
@@ -74,10 +80,10 @@ void HttpConn::close_conn()
 
 void HttpConn::clear_conn()
 {
-    //------------------------先这样，等完善----------------------------
-    response_file_ = nullptr;
-    memset(&response_file_stat_, 0, sizeof(response_file_stat_));
-    is_linger = false;
+    /* 清空缓存中内容 */
+    vector<char>().swap(read_buffer_);
+    vector<char>().swap(write_buffer_);
+    init();
 }
 
 /* 首先先读取一部分，然后靠查找\r\n\r\n找到content开始的部分，拷贝到打开的mmap地址。
@@ -108,20 +114,25 @@ bool HttpConn::read()
 
 void HttpConn::write()
 {
-    int bytes_to_send;
+    cout << "write buffer: " << endl;
+    string buf(write_buffer_.begin(), write_buffer_.end());
+    cout << buf << endl;
+    printf("iv ct %d, iv len1 %d, iv len2 %d\n", iv_count_
+        , (int) iv_[0].iov_len, (int) iv_[1].iov_len);
 
-    bytes_to_send = write_buffer_.size();
-    if (response_code_ == OK_200)
-        bytes_to_send += response_file_stat_.st_size;
-    printf("all to send: %d\n", bytes_to_send);
     while (true)
     {
         int bytes_sended = writev(socket_fd_, iv_, iv_count_);
+        cout << "bytes_sended: " << bytes_sended << endl;
         if (bytes_sended <= -1)
         {
+            cout << "write() errono " << errno << endl;
             /* 如果错误为EAGAIN，重复设置EPOLLOUT事件等待触发 */
             if (errno == EAGAIN)
+            {
+                cout << "write() eagain" << endl;
                 modfd(epoll_fd_, socket_fd_, EPOLLOUT);
+            }
             /* 否则说明出错，关闭连接 */
             else
             {
@@ -131,11 +142,24 @@ void HttpConn::write()
             return;
         }
 
-        bytes_to_send -= bytes_sended;
-        printf("send %d, left %d\n", bytes_sended, bytes_to_send);
-        /* 如果发送完全*/
-        if (bytes_to_send <= 0)
+        printf("send %d, base: %ld, len: %d\n", bytes_sended
+            , (long) iv_[1].iov_base, (int) iv_[1].iov_len);
+        /* 处理未发送完情况下的地址和长度 */
+        if (static_cast<size_t>(bytes_sended) >= iv_[0].iov_len)
         {
+            iv_[1].iov_base = (uint8_t *) iv_[1].iov_base + bytes_sended - iv_[0].iov_len;
+            iv_[1].iov_len -= bytes_sended - iv_[0].iov_len;
+            iv_[0].iov_len = 0;
+        }
+        else
+        {
+            iv_[0].iov_len -= bytes_sended;
+            iv_[0].iov_base = (uint8_t *) iv_[0].iov_base + bytes_sended;
+        }
+        /* 如果发送完全*/
+        if (iv_[1].iov_len <= 0)
+        {
+            cout << "发送完" << endl;
             unmap_file();
             if (is_linger)
             {
@@ -275,6 +299,7 @@ enum HttpConn::READ_STATE HttpConn::parse_request_line(std::string &line)
             is_legal = false;
         /* 转换请求URL */
         request_url_ = results[2];
+        cout << "url: " << request_url_ << endl;
         /* 检查请求版本 */
         string version = results[3];
         if (version == "0.9")
@@ -462,11 +487,14 @@ void HttpConn::add_response_content_length()
     string content_length = "Content-Length: ";
 
     if (response_code_ == OK_200)
-        content_length += response_file_stat_.st_size;
+        content_length += to_string(response_file_stat_.st_size);
     else
-        content_length += RESPONSE_ERROR_CODE_TO_CONTENT.at(response_code_).size();
+        content_length += 
+            to_string(RESPONSE_ERROR_CODE_TO_CONTENT.at(response_code_).size());
     add_to_response(content_length);
     add_response_crlf();
+
+    cout << content_length << endl;
 }
 
 void HttpConn::add_response_linger()

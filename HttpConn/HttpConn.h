@@ -22,7 +22,6 @@ public:
 
 private:
     static const int READ_BUFFER_SIZE = 2048;
-    static const int WRITE_BUFFER_SIZE = 1024;
 
     enum CHECK_STATE {CHECK_HEADER, CHECK_REQUEST_LINE, CHECK_CONTENT};
     enum READ_STATE {READ_INCOMPLETE, READ_COMPLETE, READ_ERROR};
@@ -32,6 +31,7 @@ private:
         , INTERNAL_SERVER_ERROR_500};
     static const std::unordered_map<enum HTTP_CODE, std::string> RESPONSE_ERROR_CODE_TO_CONTENT;
 
+    void init();
     /* 发送成功且继续使用连接后调用 */
     enum READ_STATE process_read();
     bool parse_line(std::string &line);

@@ -34,7 +34,9 @@ private:
     int listen_fd_;                                     // 监听端口文件描述符
     // int signal_fd_[2];                               // 用来接收中断的
     int epoll_fd_;                                      // 事件指针
-    std::shared_ptr<ThreadPool<HttpConn>> thread_pool_; // 线程池指针
+    /* ThreadPool为单例模式对象，因为作为成员必须调用构造函数所以使用指针
+     * ，且避免错误内存释放不使用智能指针
+     */
     Timer<HttpConn> timer_;                             // 定时器指针
     int time_out_ms_;                                   // 定时器间隔，以毫秒为单位
     std::string path_resource_;                        // 资源路径

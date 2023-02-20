@@ -1,0 +1,156 @@
+// 记得修改网址
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script type="text/javascript"src="https://cdn.bootcss.com/jquery/3.2.1/jquery.min.js"></script>
+    <title>Document</title>
+    <style>
+      .demo{
+        display: inline-block;
+        text-align: center;
+        position:absolute;
+  left:25%;
+      }
+      .conent{
+        width: 600px;
+        height: 600px;
+        display: inline-block;
+        margin: 0 auto;
+        text-align: center;
+        
+        border-radius: 29px;
+background: #e0e0e0;
+box-shadow:  5px 5px 10px #cecece,
+             -5px -5px 10px #f2f2f2;
+      }
+      .conent input{
+        border:none;
+        width: 70px;
+        background-color: #e8e8e8; 
+      }
+      .conent button{
+    background-color: #e8e8e8; /* Green */
+    color: white;
+    border: none;
+    width: 80px;
+    height: 40px;
+    font-size: 16px;
+    margin: 25px;
+      }
+      #file{
+        background-color: #e8e8e8; /* Green */
+    color: white;
+    border: none;
+    width: 80px;
+    font-size: 16px;
+    margin: 25px;
+      }
+      .box {
+        display: inline-block;
+        height: 300px;
+        width: 300px;
+        background-color: rgb(255, 255, 255);
+        
+      }
+      .box img{
+        width: 300px;
+        height: 300px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="demo">
+    <main class="conent">
+      <div>
+      <input type="text" id="test" />
+      <span>第</span>
+      <input id="num" placeholder="请输入数字"></input>
+      <span>幅图</span>
+      <button onclick="view()">查看</button>
+      </div>
+      <div><input type="file" id="file" /><button onclick="add()">添加</button></div>
+      <div class="box">
+        <img id ="img" src="" alt="">
+        <canvas id="myCanvas" style="display:none;"></canvas>
+      </div>
+    </main>
+  </div>
+  </body>
+  <script>
+    var oInp = document.getElementById('num');
+    oInp.onblur=function(){
+        /* 当输入不是数字的时候，Number后返回的值是NaN;然后用isNaN判断 */
+        if(isNaN(Number(oInp.value))){  
+            alert("不是数字！,请输入一个正整数")
+        }
+    }
+    function view(){
+      let num =document.getElementById("num").value;
+      document.getElementById("test").value = num;
+      console.log(num);
+      var xml =new XMLHttpRequest();
+      xml.open("get","http://172.24.93.168:8888/" +  'file',true);
+      xml.setRequestHeader('file', num +'.jpg');
+      xml.send();
+      xml.onreadystatechange = () =>{
+        if(xml.readyState == 4){
+          if(xml.status == 200){
+            let res =JSON.parse(xml.responseText);
+            $('#img').attr(
+              'src',
+              res.file
+            )
+          }
+        }
+      }
+    }
+
+    function add(){
+      var c = document.getElementById("myCanvas");
+      var ctx = c.getContext("2d");
+      var img = document.getElementById("img");
+      ctx.drawImage(img, 10, 10);
+      var imgString = c.toDataURL();
+      var fileName = document.getElementById("file").value
+      console.log(fileName);
+
+      let params = {'fileName': fileName, "fileData": imgString};
+      var xml =new XMLHttpRequest();
+          xml.open("post","http://172.24.93.168:8888/",true);
+          xml.setRequestHeader("Access-Control-Allow-Method","POST")
+          xml.send(params);
+    }
+  </script>
+  <script type="text/javascript">
+    var file = document.getElementById('file');
+    var image = document.querySelector("img");
+    file.onchange = function() {
+        var fileData = this.files[0];  // 获取到一个FileList对象中的第一个文件( File 对象)上传的文件
+        // var pettern = /^image/;
+          
+        console.info(fileData.type);
+
+        var aa=document.getElementById("file").value.toLowerCase().split('.');  // 以“.”分隔上传文件字符串
+        if(aa[aa.length-1] !='jpg'){
+          alert("图片格式不正确!只能上传jpg格式文件");
+          return;
+        }
+        // 正则表达式，无法选择详细格式，注释
+        // if (!pettern.test(fileData.type)) {
+        //     alert("图片格式不正确");
+        //     return;
+        // }
+        var reader = new FileReader();
+        reader.readAsDataURL(fileData);  // 异步读取文件内容，结果用data:url的字符串形式表示
+        /*当读取操作成功完成时调用*/
+        reader.onload = function(e) {
+            console.log(e);  // 查看对象
+            console.log(this.result);  // 要的数据 这里的this指向FileReader()对象的实例reader
+            image.setAttribute("src", this.result);
+        }
+    }
+  </script>
+</html>

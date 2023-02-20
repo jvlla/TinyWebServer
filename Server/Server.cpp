@@ -19,7 +19,7 @@ extern void addfd(int epollfd, int fd);
 extern void modfd(int epollfd, int fd, int ev);
 
 Server::Server(string listen_ip, int listen_port, string path_resource, int time_out_ms)
-        : listen_ip_(listen_ip), listen_port_(listen_port), time_out_ms_(time_out_ms) 
+        : listen_ip_(listen_ip), listen_port_(listen_port), time_out_ms_(time_out_ms)
 {
     path_resource_ = path_resource;
     stop_server_ = false;
@@ -68,7 +68,7 @@ void Server::run()
     // addsig(SIGTERM);
     // addsig(SIGINT);
     signal(SIGPIPE, SIG_IGN);
-    signal(SIGHUP, SIG_IGN);
+    // signal(SIGHUP, SIG_IGN);
 
     while(!stop_server_)
     {
@@ -106,7 +106,8 @@ void Server::run()
             {
                 printf("%d in\n", fd);
                 printf("read and process\n");
-                connections[fd].read_and_process();
+                ThreadPool<HttpConn>::get_instance().add_task(&connections[fd]);
+                // connections[fd].read_and_process();
             }
             else if (epoll_events_[i].events & EPOLLOUT)
             {
