@@ -21,7 +21,7 @@ public:
     static int epoll_fd_;  // epoll事件文件描述符
 
 private:
-    static const int READ_BUFFER_SIZE = 2048;
+    static const int DEFAULT_READ_BUFFER_SIZE = 2048;
 
     enum CHECK_STATE {CHECK_HEADER, CHECK_REQUEST_LINE, CHECK_CONTENT};
     enum READ_STATE {READ_INCOMPLETE, READ_COMPLETE, READ_ERROR};
@@ -52,31 +52,40 @@ private:
     /* 恢复line、check等等index */ 
     void clear_conn();  
 
-    enum HTTP_METHOD request_method_;           // http请求方法
-    std::string request_url_;                   // http请求URL
-    enum HTTP_VERSION request_version_;         // http请求版本
-    bool is_linger;                             // 结束后是否断开连接
-    std::string request_host_;                  // 自host起五个字段并未进一步处理
-    std::string request_user_agent_;                    
+    /* 用于描述socket的变量 */
+    int socket_fd_;                                         // socket文件描述符
+    sockaddr_in address_;                                   // 网络地址
+    /* 用于进行解析的状态变量 */
+    enum CHECK_STATE check_state_;                          // 请求头解析状态
+    enum HTTP_CODE response_code_;                          // 响应报文状态码
+    /* 请求报文有关变量 */
+    enum HTTP_METHOD request_method_;                       // http请求方法
+    std::string request_url_;                               // http请求URL
+    enum HTTP_VERSION request_version_;                     // http请求版本
+    bool is_linger_;                                        // 结束后是否断开连接
+    std::string request_host_;                              // 自host起五个字段并未进一步处理
+    std::string request_user_agent_;
     std::string request_accept_;
-    std::string request_accept_encoding;
-    std::string request_accept_language;
-    
-    int socket_fd_;                             // socket文件描述符
-    sockaddr_in address_;                       // 网络地址
-    std::vector<char> read_buffer_;             // 接收缓存
-    std::vector<char> write_buffer_;            // 发送缓存
-    int header_size_;                           // 请求头长度
-    /* 迭代器需要在read_buffer_插入元素后初始化，避免失效 */
-    std::vector<char>::iterator line_iterator_; // 下一行起始位置迭代器
-    enum CHECK_STATE check_state_;              // 请求头解析状态
-    enum HTTP_CODE response_code_;          // 响应报文状态码
-    std::string path_resource_;                 // 资源路径
-    char * response_file_;                      // 响应报文中文件的映射内存地址
-    struct stat response_file_stat_;            // 响应报文中文件文件属性结构体
-    // int response_file_size_;                 // 响应报文中文件大小，即报文长度
-    struct iovec iv_[2];                        // iovec结构体
-    int iv_count_;                              // iovec结构体使用数
+    std::string request_accept_encoding_;
+    std::string request_accept_language_;
+    /* 用于存储报文的变量 */
+    std::vector<char> read_buffer_;                         // 接收缓存
+    std::vector<char> write_buffer_;                        // 发送缓存
+    std::string request_header_;                            // 请求头，以字符串形式保存
+    std::string request_content_;                           // 请求content, 以字符串形式保存
+    /* 报文变量有关的变量 */
+    int request_header_size_;                               // 请求头长度
+    int request_content_size_;                              // 请求content长度
+    std::string::iterator request_line_iterator_;           // 下一行起始位置迭代器
+    /* 用于判断是否第一次调用函数的变量 */
+    bool is_first_read_;                                    // 是否首次调用read()，用于函数内部控制
+    bool is_first_parse_line_;                              // 是否首次调用parse_line()，用于函数内部控制
+    /* 响应报文有关变量 */
+    char * response_file_;                                  // 响应报文中文件的映射内存地址
+    struct stat response_file_stat_;                        // 响应报文中文件文件属性结构体
+    struct iovec iv_[2];                                    // iovec结构体
+    int iv_count_;                                          // iovec结构体使用数
+    std::string path_resource_;                             // 资源路径
 };
 
 #endif

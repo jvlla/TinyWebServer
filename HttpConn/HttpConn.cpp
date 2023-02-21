@@ -59,14 +59,34 @@ void HttpConn::init(int fd, sockaddr_in address, string path_resource)
     init();
 }
 
+/* 除在上一init()函数中传递变量，其余变量全部赋初值 */
 void HttpConn::init()
 {
-    is_linger = false;
-    read_buffer_.resize(READ_BUFFER_SIZE);
-    response_file_ = nullptr;
-    memset(&response_file_stat_, 0, sizeof(response_file_stat_));
     check_state_ = CHECK_REQUEST_LINE;
     response_code_ = OK_200;
+    request_method_ = GET;
+    request_url_ = "";
+    request_version_ = HTTP_11;
+    is_linger_ = false;
+    request_host_ = "";
+    request_user_agent_ = "";
+    request_accept_ = "";
+    request_accept_encoding_ = "";
+    request_accept_language_ = "";
+    read_buffer_.resize(DEFAULT_READ_BUFFER_SIZE);
+    // write_buffer_不需要初始化，HttpConn类初始化为空或clear_conn()函数置为空
+    request_header_ = "";
+    request_content_ = "";
+    request_header_size_ = 0;
+    request_content_size_ = 0;
+    request_line_iterator_ = request_header_.end();
+    is_first_read_ = true;
+    is_first_parse_line_ = true;
+    response_file_ = nullptr;
+    /* 结构体置0 */
+    memset(&response_file_stat_, 0, sizeof(response_file_stat_));
+    memset(&iv_, 0, sizeof(iv_));
+    iv_count_ = 1;
 }
 
 void HttpConn::close_conn()
@@ -90,26 +110,103 @@ void HttpConn::clear_conn()
  * 靠查找"Content-Length"确定长度，直到把内容读完才可以返回true，搞定
  */
 bool HttpConn::read()
-{   
-    int bytes_read = 0;
-    // 这里读的这个长度也要改，反正这个在看了
-    while((bytes_read = recv(socket_fd_, read_buffer_.data(), read_buffer_.size(),0)) > 0)
+{
+    /* 变量均为静态类型，保证多次调用不改变 */
+    static unsigned long bytes_received;
+    static bool received_all_header;
+    int received;
+
+    if (is_first_read_)
     {
-        // 先这样，假设不管content而且一次能读完
-        break;
+        cout << "here" << endl;
+        bytes_received = 0;
+        received_all_header = false;
+        is_first_read_ = false;
     }
-    // 这里先假设没问题，但是要是出错了没有\r\n\r\n怎么办？
-    // 删除content前\r\n\r\n
-    header_size_ = bytes_read - 4;
-    read_buffer_.resize(header_size_);  
+    while((received = recv(socket_fd_, (char *) read_buffer_.data() + bytes_received
+        , read_buffer_.size() - bytes_received, 0)) > 0)
+    {
+        printf("address: %ld\n", (long) ((char *) read_buffer_.data() + bytes_received));
+        bytes_received += received;
+        printf("received %d bytes, all %d\n", received, (int) bytes_received);
+        /* 缓冲区以2倍增大 */ 
+        if (bytes_received == read_buffer_.size())
+            read_buffer_.resize(2 * read_buffer_.size());
+        if (!received_all_header)
+        {
+            string header_end = "\r\n\r\n";
+            vector<char>::iterator header_end_iterator = search(read_buffer_.begin()
+                , read_buffer_.end(), header_end.begin(), header_end.end());
+            /* 如果找到，即已获取全部请求头 */
+            if (header_end_iterator != read_buffer_.end())
+            {
+                printf("find rnrn-----------------------------------------\n");
+                header_end_iterator += 2;  // +2是为了在最后保留一组\r\n
+                /* 设置请求头大小 */
+                request_header_size_ = header_end_iterator - read_buffer_.begin();
+                request_header_.insert(request_header_.begin()
+                    , read_buffer_.begin(), header_end_iterator);
 
-//-------------------------------------------------------------------------
-    cout << "received length: " << bytes_read << endl;
-    cout << read_buffer_.size() << endl;
-    string header(read_buffer_.begin(), read_buffer_.end());
-    cout << header << endl << endl;
-
-    return true;
+                regex pattern("Content-Length: (\\d+)\r\n");
+                smatch result;
+                if (regex_search(request_header_, result, pattern))
+                {
+                    request_content_size_ = atoi(string(result[1]).data());
+                    printf("content size: %d\n", request_content_size_);
+                }
+                /* 当报文中存在\r\n\r\n但不存在Content-Length请求头时，
+                 * 这时有两种情况，当\r\n\r\n为结尾时，不存在content，否则报文错误
+                 */
+                else
+                {
+                    cout << "no content lenght" << endl;
+                    /* 如果\r\n\r\n是报文末尾，说明是普通get报文，read()结束，返回true */
+                    if (header_end_iterator - read_buffer_.begin() + 2
+                        >= static_cast<long>(bytes_received))
+                    {
+                        request_content_size_ = 0;
+                        return true;
+                    }
+                    /* 否则报文有问题，简单起见直接关闭连接 */
+                    else
+                    {
+                        close_conn();
+                        return false;
+                    }
+                }
+                received_all_header = true;
+                cout << request_content_size_ << endl;
+            }
+        }
+        /* 这里不能用else，因为received_all_header可能改变 */
+        if (received_all_header)
+        {
+            printf("has got header\n");
+            if (bytes_received >= 
+                static_cast<unsigned long>(request_header_size_ + request_content_size_ + 2))
+            {
+                cout << "enough end" << endl;
+                request_content_.insert(request_content_.begin()
+                    , read_buffer_.begin() + request_header_size_ + 2
+                    , read_buffer_.begin() + request_header_size_ + request_content_size_ + 2);
+                return true;
+            }
+        }
+    }
+    /* 进行recv()返回值的错误处理 */ 
+    /* 只有errno为EAGAIN和EWOULDBLOCK的情况可以继续接收报文 */ 
+    if (received == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
+    {
+        /* 设置继续监听epollin事件以接收报文 */
+        modfd(epoll_fd_, socket_fd_, EPOLLIN);
+        return false;
+    }
+    /* 其余全部情况关闭连接 */
+    else
+    {
+        close_conn();
+        return false;
+    }
 }
 
 void HttpConn::write()
@@ -157,11 +254,11 @@ void HttpConn::write()
             iv_[0].iov_base = (uint8_t *) iv_[0].iov_base + bytes_sended;
         }
         /* 如果发送完全*/
-        if (iv_[1].iov_len <= 0)
+        if (iv_[0].iov_len == 0 && iv_[1].iov_len == 0)
         {
             cout << "发送完" << endl;
             unmap_file();
-            if (is_linger)
+            if (is_linger_)
             {
                 cout << "is linger, reset epollin" << endl;
                 modfd(epoll_fd_, socket_fd_, EPOLLIN);
@@ -178,7 +275,11 @@ void HttpConn::read_and_process()
 {
     /* 如果未完全读入请求报文，等待下次RPOLLIN事件，继续调用read()函数 */
     if (!read())
-        return;
+        return;    
+    printf("header size: %d %d, content size: %d %d\n"
+        , request_header_size_, (int) request_header_.size()
+        , request_content_size_, (int) request_content_.size());
+    cout << request_content_ << endl;
     
     cout << "after read" << endl;
     switch(process_read())
@@ -212,8 +313,6 @@ enum HttpConn::READ_STATE HttpConn::process_read()
 {
     READ_STATE read_state = READ_INCOMPLETE;
 
-    cout << "here" << endl;
-    line_iterator_ = read_buffer_.begin();
     while(read_state == READ_INCOMPLETE)
     {
         std::string line;
@@ -225,6 +324,7 @@ enum HttpConn::READ_STATE HttpConn::process_read()
         {
             read_state = READ_ERROR;
             response_code_ = BAD_REQUEST_400;
+            cout << "400, maybe parse line" << endl;
             break;  // 跳出while，避免对出错行调用parse_*函数
         }
         cout << "line:  " << line << endl;
@@ -253,16 +353,21 @@ enum HttpConn::READ_STATE HttpConn::process_read()
 
 bool HttpConn::parse_line(std::string &line)
 {
-    vector<char>::iterator end;
+    if (is_first_parse_line_)
+    {
+        request_line_iterator_ = request_header_.begin();
+        is_first_parse_line_ = false;
+    }
+    string::iterator end;
 
-    end = std::find(line_iterator_, read_buffer_.end(), '\r');
+    end = find(request_line_iterator_, request_header_.end(), '\r');
     /* 如果"r"后不存在请求头或"\r\n"不连续，报文错误 */
-    if (line_iterator_ == read_buffer_.end() || *(end + 1) != '\n')
+    if (request_line_iterator_ >= request_header_.end() || *(end + 1) != '\n')
         return false;
     else
     {
-        line.assign(line_iterator_, end);
-        line_iterator_ = end + 2;
+        line.assign(request_line_iterator_, end);
+        request_line_iterator_ = end + 2;
         return true;
     }
 }
@@ -343,9 +448,9 @@ enum HttpConn::READ_STATE HttpConn::parse_header(std::string &line)
         else if (field == "Connection")
         {
             if (value == "keep-alive")
-                is_linger = true;
+                is_linger_ = true;
             else if (value == "close")
-                is_linger = false;
+                is_linger_ = false;
             else
                 is_legal = false;
         }   
@@ -356,9 +461,9 @@ enum HttpConn::READ_STATE HttpConn::parse_header(std::string &line)
         else if (field == "Accept")
             request_accept_ = value;
         else if (field == "Accept-Encoding")
-            request_accept_encoding = value;
+            request_accept_encoding_ = value;
         else if (field == "Accept-Language")
-            request_accept_language = value;
+            request_accept_language_ = value;
         else
             cout << "unknown header:  " << line << endl;
     }
@@ -368,13 +473,13 @@ enum HttpConn::READ_STATE HttpConn::parse_header(std::string &line)
         is_legal = false;
     }
 
-    /* line_iterator_超过read_buffer_尾后迭代器说明已经处理完全部请求头，可以开始处理content */
-    if (line_iterator_ >= read_buffer_.end())
+    /* request_line_iterator_超过request_header_尾后迭代器说明已经处理完全部请求头，可以开始处理content */
+    if (request_line_iterator_ >= request_header_.end())
     {
         cout << "to content" << endl;
         check_state_ = CHECK_CONTENT;  // CHECK_STATE状态转移
     }
-                
+    
     /* 当请求头合法时，继续处理，否则停止处理，返回http400报文 */
     if (is_legal)
         return READ_INCOMPLETE;  // READ_STATE状态转移
@@ -502,7 +607,7 @@ void HttpConn::add_response_linger()
     string linger;
 
     linger = "Connection: ";
-    if (is_linger && response_code_ == OK_200)
+    if (is_linger_ && response_code_ == OK_200)
         linger += "keep-alive";
     else
         linger += "close";

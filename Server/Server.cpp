@@ -106,8 +106,8 @@ void Server::run()
             {
                 printf("%d in\n", fd);
                 printf("read and process\n");
-                ThreadPool<HttpConn>::get_instance().add_task(&connections[fd]);
-                // connections[fd].read_and_process();
+                // ThreadPool<HttpConn>::get_instance().add_task(&connections[fd]);
+                connections[fd].read_and_process();
             }
             else if (epoll_events_[i].events & EPOLLOUT)
             {

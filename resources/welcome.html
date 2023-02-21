@@ -1,7 +1,7 @@
-// 记得修改网址
 <!DOCTYPE html>
 <html lang="en">
   <head>
+    <title>欢迎页</title>
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -108,6 +108,8 @@ box-shadow:  5px 5px 10px #cecece,
       }
     }
 
+    var reader;
+
     function add(){
       var c = document.getElementById("myCanvas");
       var ctx = c.getContext("2d");
@@ -117,14 +119,16 @@ box-shadow:  5px 5px 10px #cecece,
       var fileName = document.getElementById("file").value
       console.log(fileName);
 
-      let params = {'fileName': fileName, "fileData": imgString};
+      let params = '{"fileName": "' + fileName + '", "fileData": "' + reader.result + '"}';
+      // let params = {'fileName': fileName, "fileData": imgString};
+      console.log(reader.result)
+      console.log(params);
       var xml =new XMLHttpRequest();
-          xml.open("post","http://172.24.93.168:8888/",true);
-          xml.setRequestHeader("Access-Control-Allow-Method","POST")
+          xml.open("post","http://172.21.97.173:10001/" + 'upload',true);
+          xml.setRequestHeader("Access-Control-Allow-Method","POST");
           xml.send(params);
     }
-  </script>
-  <script type="text/javascript">
+    
     var file = document.getElementById('file');
     var image = document.querySelector("img");
     file.onchange = function() {
@@ -143,7 +147,7 @@ box-shadow:  5px 5px 10px #cecece,
         //     alert("图片格式不正确");
         //     return;
         // }
-        var reader = new FileReader();
+        reader = new FileReader();
         reader.readAsDataURL(fileData);  // 异步读取文件内容，结果用data:url的字符串形式表示
         /*当读取操作成功完成时调用*/
         reader.onload = function(e) {
