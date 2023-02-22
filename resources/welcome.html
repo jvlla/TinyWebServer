@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
-    <title>欢迎页</title>
+    <title>图片服务器主页</title>
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -50,13 +50,13 @@ box-shadow:  5px 5px 10px #cecece,
       }
       .box {
         display: inline-block;
+        width: 400px;
         height: 300px;
-        width: 300px;
         background-color: rgb(255, 255, 255);
         
       }
       .box img{
-        width: 300px;
+        width: 400px;
         height: 300px;
       }
     </style>
@@ -64,8 +64,10 @@ box-shadow:  5px 5px 10px #cecece,
   <body>
     <div class="demo">
     <main class="conent">
+      <div id="pictureCount">
+      </div>
       <div>
-      <input type="text" id="test" />
+      <!-- <input type="text" id="test" /> -->
       <span>第</span>
       <input id="num" placeholder="请输入数字"></input>
       <span>幅图</span>
@@ -80,6 +82,22 @@ box-shadow:  5px 5px 10px #cecece,
   </div>
   </body>
   <script>
+    window.onload = setPicturnCount();
+    function setPicturnCount() {
+      var xml =new XMLHttpRequest();
+      xml.open('get', '/COUNT_IMAGE', true);
+      xml.setRequestHeader('is-image-use', true);
+      xml.send();
+      xml.onreadystatechange = () =>{
+        if(xml.readyState == 4){
+          if(xml.status == 200){
+            let res =JSON.parse(xml.responseText);
+            document.getElementById("pictureCount").innerHTML="<br><br>共有" + res.pictureCount + "幅图";
+          }
+        }
+      }
+    }
+
     var oInp = document.getElementById('num');
     oInp.onblur=function(){
         /* 当输入不是数字的时候，Number后返回的值是NaN;然后用isNaN判断 */
@@ -87,21 +105,25 @@ box-shadow:  5px 5px 10px #cecece,
             alert("不是数字！,请输入一个正整数")
         }
     }
+
     function view(){
-      let num =document.getElementById("num").value;
-      document.getElementById("test").value = num;
+      let num = document.getElementById("num").value;
+      document.getElementById("num").value = num;
       console.log(num);
+      let params = '{"imageNumber":' + num +'}';
+      console.log(params);
+
       var xml =new XMLHttpRequest();
-      xml.open("get","http://172.24.93.168:8888/" +  'file',true);
-      xml.setRequestHeader('file', num +'.jpg');
-      xml.send();
+      xml.open('post', '/GET_IMAGE', true);
+      xml.setRequestHeader('is-image-use', true);
+      xml.send(params);
       xml.onreadystatechange = () =>{
         if(xml.readyState == 4){
           if(xml.status == 200){
             let res =JSON.parse(xml.responseText);
             $('#img').attr(
               'src',
-              res.file
+              res.imageName
             )
           }
         }
@@ -109,35 +131,41 @@ box-shadow:  5px 5px 10px #cecece,
     }
 
     var reader;
-
     function add(){
+      alert("赶时间做简历还没实现这功能");
+      return;
+
       var c = document.getElementById("myCanvas");
       var ctx = c.getContext("2d");
       var img = document.getElementById("img");
       ctx.drawImage(img, 10, 10);
       var imgString = c.toDataURL();
-      var fileName = document.getElementById("file").value
+
+      var fullName = document.getElementById("file").value;
+      var splitName = fullName.split('\\');
+      var fileName = splitName[splitName.length - 1];
       console.log(fileName);
 
-      let params = '{"fileName": "' + fileName + '", "fileData": "' + reader.result + '"}';
-      // let params = {'fileName': fileName, "fileData": imgString};
-      console.log(reader.result)
+      let params = '{"imageName": "' + fileName + '", "image": "' + reader.result + '"}';
+      // console.log(reader.result);
       console.log(params);
       var xml =new XMLHttpRequest();
-          xml.open("post","http://172.21.97.173:10001/" + 'upload',true);
-          xml.setRequestHeader("Access-Control-Allow-Method","POST");
-          xml.send(params);
+      xml.open('post', 'POST_IMAGE', true);
+      xml.setRequestHeader('Access-Control-Allow-Method', 'POST');
+      xml.setRequestHeader('is-image-use', true);
+      xml.send(params);
+      
+      setPicturnCount();
     }
-    
+
     var file = document.getElementById('file');
-    var image = document.querySelector("img");
+    var image = document.querySelector('img');
     file.onchange = function() {
         var fileData = this.files[0];  // 获取到一个FileList对象中的第一个文件( File 对象)上传的文件
         // var pettern = /^image/;
-          
         console.info(fileData.type);
 
-        var aa=document.getElementById("file").value.toLowerCase().split('.');  // 以“.”分隔上传文件字符串
+        var aa = document.getElementById("file").value.toLowerCase().split('.');  // 以“.”分隔上传文件字符串
         if(aa[aa.length-1] !='jpg'){
           alert("图片格式不正确!只能上传jpg格式文件");
           return;

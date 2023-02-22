@@ -18,30 +18,24 @@ public:
     /* 服务器运行，循环监听事件 */ 
     void run();
 
+    static bool stop_server_;
+    static int signal_fd_[2];                              // 用来接收中断的
 private:
     void deal_listen();
     void deal_read_to();
     void deal_write_from();
-    // 这得看一下啊，怎么弄，这封装不对劲啊
-    // void sig_handler(int sig);
-    // void addsig(int sig);
 
     static const int MAX_FD = 65536;
     static const int MAX_EVENT_NUMBER = 30000;
-    bool stop_server_;
-    const std::string listen_ip_;                       // IP
-    const int listen_port_;                             // 端口
-    int listen_fd_;                                     // 监听端口文件描述符
-    // int signal_fd_[2];                               // 用来接收中断的
-    int epoll_fd_;                                      // 事件指针
-    /* ThreadPool为单例模式对象，因为作为成员必须调用构造函数所以使用指针
-     * ，且避免错误内存释放不使用智能指针
-     */
-    Timer<HttpConn> timer_;                             // 定时器指针
-    int time_out_ms_;                                   // 定时器间隔，以毫秒为单位
-    std::string path_resource_;                        // 资源路径
-    std::unordered_map<int, HttpConn> connections;      // http连接
-    epoll_event epoll_events_[MAX_EVENT_NUMBER];        // epoll监听事件
+    const std::string listen_ip_;                   // IP
+    const int listen_port_;                         // 端口
+    int listen_fd_;                                 // 监听端口文件描述符
+    int epoll_fd_;                                  // 事件指针
+    Timer<HttpConn> timer_;                         // 定时器指针
+    int time_out_ms_;                               // 定时器间隔，以毫秒为单位
+    std::string path_resource_;                     // 资源路径
+    std::unordered_map<int, HttpConn> connections;  // http连接
+    epoll_event epoll_events_[MAX_EVENT_NUMBER];    // epoll监听事件
     // 后面还得有和数据库相关的
 };
 

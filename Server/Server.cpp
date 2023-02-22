@@ -17,20 +17,30 @@ using namespace std;
 extern int setnonblocking(int fd);
 extern void addfd(int epollfd, int fd);
 extern void modfd(int epollfd, int fd, int ev);
+void addsig(int sig, void (*sig_handler)(int));
+void sig_handler(int sig);
+
+/* 静态变量在类外定义 */
+bool Server::stop_server_ = false;
+int Server::signal_fd_[2] = {0, 0};
 
 Server::Server(string listen_ip, int listen_port, string path_resource, int time_out_ms)
-        : listen_ip_(listen_ip), listen_port_(listen_port), time_out_ms_(time_out_ms)
+    : listen_ip_(listen_ip), listen_port_(listen_port), time_out_ms_(time_out_ms)
 {
     path_resource_ = path_resource;
-    stop_server_ = false;
 }
 
 Server::~Server()
 {
-    this->stop_server_ = true;
+    cout << "in server destructor" << endl;
+    stop_server_ = true;
     close(listen_fd_);
-    // close(signal_fd_[0]);
-    // close(signal_fd_[1]);
+    close(epoll_fd_);
+    for (pair<const int, HttpConn> connection: connections)
+    {
+        printf("close %d\n", connection.first);
+        close(connection.first);
+    }
 }
 
 void Server::run()
@@ -49,7 +59,6 @@ void Server::run()
 
     ret = bind(listen_fd_, (struct sockaddr *)&address, sizeof(address));
     assert(ret >= 0); 
-
     ret = listen(listen_fd_, 5);
     assert(ret >= 0);
 
@@ -59,24 +68,25 @@ void Server::run()
     /* 设置HttpConn类的epoll事件文件描述符 */
     HttpConn::epoll_fd_ = epoll_fd_;
 
-    // ret = socketpair(PF_UNIX, SOCK_STREAM, 0, signal_fd_);
-    // assert(ret != -1);
-    // setnonblocking(signal_fd_[1]);
-    // addfd(epoll_fd_, signal_fd_[0]);
-    // addsig(SIGHUP);
-    // addsig(SIGPIPE);
-    // addsig(SIGTERM);
-    // addsig(SIGINT);
-    signal(SIGPIPE, SIG_IGN);
-    // signal(SIGHUP, SIG_IGN);
+    /* 建立用于接收信号处理结果的管道 */
+    ret = socketpair(PF_UNIX, SOCK_STREAM, 0, signal_fd_);
+    assert(ret != -1);
+    setnonblocking(signal_fd_[1]);
+    addfd(epoll_fd_, signal_fd_[0]);
+    /* 为信号设置信号处理函数 */
+    addsig(SIGPIPE, sig_handler);
+    addsig(SIGHUP, sig_handler);
+    addsig(SIGTERM, sig_handler);
+    addsig(SIGINT, sig_handler);
 
     while(!stop_server_)
     {
         cout << "wait epoll" << endl;
         int number = epoll_wait(epoll_fd_, epoll_events_, MAX_EVENT_NUMBER, -1);
-        if (number < 0 && errno != EAGAIN)
+        /* 如果epoll_wait出错，且不是因为需要再次尝试(EAGAIN)或捕获信号(EINTR) */
+        if (number < 0 && errno != EAGAIN && errno != EINTR)
         {
-            printf("epoll failure\n");
+            printf("epoll failure, errno: %d\n", errno);
             break;
         }
 
@@ -89,14 +99,40 @@ void Server::run()
                 cout << "get listen" << endl;
                 struct sockaddr_in client_address;
                 socklen_t client_addrlength = sizeof(client_address);
-                int conn_fd = accept(listen_fd_
-                    , (struct sockaddr *) &client_address, &client_addrlength);
+                int conn_fd = accept(listen_fd_, (struct sockaddr *) &client_address, &client_addrlength);
                 if (conn_fd < 0)
                 {
                     printf("errno is: %d\n", errno);
                     continue;
                 }
                 connections[conn_fd].init(conn_fd, client_address, path_resource_);
+            }
+            /* 处理信号 */
+            else if(fd == signal_fd_[0] && epoll_events_[i].events & EPOLLIN)
+            {
+                char signals[1024];
+                ret = recv(signal_fd_[0], signals, sizeof(signals), 0);
+                if(ret == -1 || ret == 0)
+                    continue;
+                else
+                {
+                    for(int i = 0; i < ret; ++i)
+                    {
+                        printf("catch signal %d\n", signals[i]);
+                        switch(signals[i])
+                        {
+                            case SIGPIPE:
+                            case SIGHUP:
+                                continue;
+                                break;
+                            case SIGTERM:
+                            case SIGINT:
+                                printf("get sig, stop server\n");
+                                stop_server_ = true;
+                                break;
+                        }
+                    }
+                }
             }
             else if (epoll_events_[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR))
             {
@@ -119,21 +155,21 @@ void Server::run()
     }
 }
 
-// 不行，这信号处理配上对象怎么想怎么都不对，再议再议
-// void Server::sig_handler(int sig)
-// {
-//     int save_errno = errno;
-//     int msg = sig;
-//     send(signal_fd_[1], (char *)&msg, 1, 0);
-//     errno = save_errno;
-// }
+void addsig(int sig, void (*sig_handler)(int))
+{
+    struct sigaction sa;
+    memset(&sa, '\0', sizeof(sa));
+    sa.sa_handler = sig_handler;
+    sa.sa_flags |= SA_RESTART;
+    sigfillset(&sa.sa_mask);
+    assert(sigaction(sig, &sa, NULL) != -1);
+}
 
-// void Server::addsig(int sig)
-// {
-//     struct sigaction sa;
-//     memset(&sa, '\0', sizeof(sa));
-//     sa.sa_handler = Server::sig_handler;
-//     sa.sa_flags |= SA_RESTART;
-//     sigfillset(&sa.sa_mask);
-//     assert(sigaction(sig, &sa, NULL) != -1);
-// }
+void sig_handler(int sig)
+{
+    printf("\nin sig_handler\n");
+    int save_errno = errno;
+    int msg = sig;
+    send(Server::signal_fd_[1], (char *)&msg, 1, 0);
+    errno = save_errno;
+}

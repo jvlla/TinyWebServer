@@ -13,7 +13,9 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include "HttpConn.h"
+#include "Function.h"
 using namespace std;
+using json = nlohmann::json;
 
 void addfd(int epollfd, int fd);
 void removefd(int epollfd, int fd);
@@ -50,13 +52,10 @@ void HttpConn::init(int fd, sockaddr_in address, string path_resource)
     getsockopt(socket_fd_, SOL_SOCKET, SO_ERROR, &error, &len);
     int reuse = 1;
     setsockopt(socket_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-    //-------------------------照着人家继续完善---------------------------
     /* 将socket文件描述符加入epoll事件表 */
     addfd(epoll_fd_, socket_fd_);
-    /* 将响应报文发送文件stat结构体置零，避免使用socket时出错 */
-    memset(&response_file_stat_, 0, sizeof(response_file_stat_));
-    cout << "after init" << endl;
     init();
+    cout << "after init" << endl;
 }
 
 /* 除在上一init()函数中传递变量，其余变量全部赋初值 */
@@ -64,10 +63,12 @@ void HttpConn::init()
 {
     check_state_ = CHECK_REQUEST_LINE;
     response_code_ = OK_200;
+    function_ = DEFAULT;
     request_method_ = GET;
     request_url_ = "";
     request_version_ = HTTP_11;
     is_linger_ = false;
+    request_is_image_use_ = "";
     request_host_ = "";
     request_user_agent_ = "";
     request_accept_ = "";
@@ -77,6 +78,8 @@ void HttpConn::init()
     // write_buffer_不需要初始化，HttpConn类初始化为空或clear_conn()函数置为空
     request_header_ = "";
     request_content_ = "";
+    request_content_json_ = json::parse("{}");
+    response_content_json_ = json::parse("{}");
     request_header_size_ = 0;
     request_content_size_ = 0;
     request_line_iterator_ = request_header_.end();
@@ -253,7 +256,7 @@ void HttpConn::write()
             iv_[0].iov_len -= bytes_sended;
             iv_[0].iov_base = (uint8_t *) iv_[0].iov_base + bytes_sended;
         }
-        /* 如果发送完全*/
+        /* 如果发送完全 */
         if (iv_[0].iov_len == 0 && iv_[1].iov_len == 0)
         {
             cout << "发送完" << endl;
@@ -284,12 +287,30 @@ void HttpConn::read_and_process()
     cout << "after read" << endl;
     switch(process_read())
     {
-        //----------------这个如果404,403什么的，不知道传个o的iovec行不行-----------------
         case READ_COMPLETE:
             cout << "read_complete" << endl;
             cout << response_code_ << endl;
             iv_count_ = 2;
-            response_code_ = process_file();
+            // response_code_ = process_file();
+            printf("function: %d\n", function_);
+            switch(function_)
+            {
+                case DEFAULT:
+                    response_code_ = default_file(path_resource_, request_url_, response_file_stat_, response_file_);
+                    break;
+                case COUNT_IMAGE:
+                    response_code_ = count_image(path_resource_, request_content_json_, response_content_json_);
+                    break;
+                case GET_IMAGE:
+                    response_code_ = get_image(path_resource_, request_content_json_, response_content_json_);
+                    break;
+                case POST_IMAGE:
+                    response_code_ = post_image(path_resource_, request_content_json_, response_content_json_);
+                    break;
+                default:
+                    response_code_ = INTERNAL_SERVER_ERROR_500;
+            }
+            cout << "here" << endl;
             cout << response_code_ << endl;
             process_write();
             break;
@@ -305,7 +326,7 @@ void HttpConn::read_and_process()
             process_write();
             break;
     }
-    // 这里是不是还得加个变量看能不能写的
+    /* 设置EPOLLOUT事件，等待发送响应报文 */
     modfd(epoll_fd_, socket_fd_, EPOLLOUT);
 }
 
@@ -339,6 +360,19 @@ enum HttpConn::READ_STATE HttpConn::process_read()
                 read_state = parse_header(line);
                 break;
             case CHECK_CONTENT:
+                if (request_method_ == GET && request_url_ == "/COUNT_IMAGE" && request_is_image_use_ == "true")
+                    function_ = COUNT_IMAGE;
+                else if (request_method_ == POST && request_url_ == "/GET_IMAGE" && request_is_image_use_ == "true")
+                    function_ = GET_IMAGE;
+                else if (request_method_ == POST && request_url_ == "/POST_IMAGE" && request_is_image_use_ == "true")
+                    function_ = POST_IMAGE;
+                else
+                {
+                    function_ = DEFAULT;
+                    /* 默认访问欢迎页 */
+                    if (request_url_ == "/")
+                        request_url_ = "/welcome.html";
+                }
                 read_state = parse_content();
                 break;
             /* check_state_状态出错，设置http状态码500 */
@@ -464,6 +498,8 @@ enum HttpConn::READ_STATE HttpConn::parse_header(std::string &line)
             request_accept_encoding_ = value;
         else if (field == "Accept-Language")
             request_accept_language_ = value;
+        else if (field == "is-image-use")
+            request_is_image_use_ = value;
         else
             cout << "unknown header:  " << line << endl;
     }
@@ -493,49 +529,58 @@ enum HttpConn::READ_STATE HttpConn::parse_header(std::string &line)
 enum HttpConn::READ_STATE HttpConn::parse_content()
 {
     cout << "in parse_content()" << endl;
+    if (function_ != DEFAULT && request_content_size_ != 0)
+        try {
+            request_content_json_ = json::parse(request_content_);
+        } catch(...) {
+            response_code_ = BAD_REQUEST_400;
+            return READ_ERROR;
+        }
     return READ_COMPLETE;
 }
 
-enum HttpConn::HTTP_CODE HttpConn::process_file()
-{
-    if (response_code_ != OK_200)
-        return response_code_;
-    string path_file;
-    char path[1000];
-    int fd;
+// enum HttpConn::HTTP_CODE HttpConn::process_file()
+// {
+//     if (response_code_ != OK_200)
+//         return response_code_;
+//     string path_file;
+//     char path[1000];
+//     int fd;
 
-    /* 处理文件名 */
-    if (!getcwd(path, sizeof(path)))
-        return INTERNAL_SERVER_ERROR_500;
-    path_file = path;
-    if (request_url_ == "/")
-        path_file += path_resource_ + "/welcome.html";
-    else
-        path_file += path_resource_ + request_url_;
-    printf("%s\n", path_file.data());
+//     /* 处理文件名 */
+//     if (!getcwd(path, sizeof(path)))
+//         return INTERNAL_SERVER_ERROR_500;
+//     path_file = path;
+//     // if (request_url_ == "/")
+//     //     path_file += path_resource_ + "/welcome.html";
+//     // else
+//     path_file += path_resource_ + request_url_;
+//     printf("%s\n", path_file.data());
 
-    /* 处理错误情况 */
-    if (stat(path_file.data(), &response_file_stat_) < 0)
-    {
-        cout << "in 404" << endl;
-        return NOT_FOUND_404;
-    }
-    if (!(response_file_stat_.st_mode & S_IROTH))
-        return FORBIDDEN_403;
-    if (S_ISDIR(response_file_stat_.st_mode))
-        return BAD_REQUEST_400;
+//     /* 处理错误情况 */
+//     if (stat(path_file.data(), &response_file_stat_) < 0)
+//     {
+//         cout << "in 404" << endl;
+//         return NOT_FOUND_404;
+//     }
+//     if (!(response_file_stat_.st_mode & S_IROTH))
+//         return FORBIDDEN_403;
+//     if (S_ISDIR(response_file_stat_.st_mode))
+//         return BAD_REQUEST_400;
     
-    /* 进行文件映射 */
-    fd = open(path_file.data(), O_RDONLY);
-    response_file_ = (char *) mmap(0, response_file_stat_.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-    return OK_200;
-}
+//     /* 进行文件映射 */
+//     fd = open(path_file.data(), O_RDONLY);
+//     response_file_ = (char *) mmap(0, response_file_stat_.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+//     close(fd);
+//     return OK_200;
+// }
 
 void HttpConn::process_write()
 {
     add_response_status_line();
     add_response_header();
+    if (function_ != DEFAULT)
+        add_to_response(response_content_json_.dump());
     iv_[0].iov_base = write_buffer_.data(); 
     iv_[0].iov_len = write_buffer_.size();
     if (response_code_ == OK_200)
@@ -591,11 +636,21 @@ void HttpConn::add_response_content_length()
 {
     string content_length = "Content-Length: ";
 
+    string test = response_content_json_.dump();
+    cout << test << endl;
+    cout << test.size() << endl;
+    cout << static_cast<string>(response_content_json_.dump()).size() << endl;
+    printf("------------------------------------------\n");
+
     if (response_code_ == OK_200)
-        content_length += to_string(response_file_stat_.st_size);
+    {
+        if (function_ == DEFAULT)
+            content_length += to_string(response_file_stat_.st_size);
+        else
+            content_length += to_string(response_content_json_.dump().size());
+    }   
     else
-        content_length += 
-            to_string(RESPONSE_ERROR_CODE_TO_CONTENT.at(response_code_).size());
+        content_length += to_string(RESPONSE_ERROR_CODE_TO_CONTENT.at(response_code_).size());
     add_to_response(content_length);
     add_response_crlf();
 
