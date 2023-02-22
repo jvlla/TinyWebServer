@@ -94,6 +94,8 @@ void HttpConn::init()
 
 void HttpConn::close_conn()
 {
+    vector<char>().swap(read_buffer_);
+    vector<char>().swap(write_buffer_);
     if (socket_fd_ != -1)
     {
         removefd(epoll_fd_, socket_fd_);
@@ -222,6 +224,12 @@ void HttpConn::write()
 
     while (true)
     {
+        int old_iv1_len = 0;
+        if (iv_[1].iov_len > 16384)
+        {
+            old_iv1_len = iv_[1].iov_len;
+            iv_[1].iov_len = 16384;
+        }   
         int bytes_sended = writev(socket_fd_, iv_, iv_count_);
         cout << "bytes_sended: " << bytes_sended << endl;
         if (bytes_sended <= -1)
@@ -242,6 +250,10 @@ void HttpConn::write()
             return;
         }
 
+        /* 暂停0.1s以暂时解决浏览器ERR_CONTENT_LENGTH_MISMATCH报错。这错误好像和缓冲有关系，现象是只在实际部署也就是网速慢得情况下出问题*/
+        usleep(100000);
+        if (old_iv1_len != 0)
+            iv_[1].iov_len = old_iv1_len;
         printf("send %d, base: %ld, len: %d\n", bytes_sended
             , (long) iv_[1].iov_base, (int) iv_[1].iov_len);
         /* 处理未发送完情况下的地址和长度 */
@@ -498,7 +510,7 @@ enum HttpConn::READ_STATE HttpConn::parse_header(std::string &line)
             request_accept_encoding_ = value;
         else if (field == "Accept-Language")
             request_accept_language_ = value;
-        else if (field == "is-image-use")
+        else if (field == "Is-Image-Use")
             request_is_image_use_ = value;
         else
             cout << "unknown header:  " << line << endl;
