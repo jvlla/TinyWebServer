@@ -11,9 +11,8 @@
 #include "../HttpConn/HttpConn.h"
 using namespace std;
 
-#include <iostream>
-#include <cstdio>
-
+enum indent {BEGIN, END, MID};
+extern void debug(string str, enum indent indent_change = MID);
 extern int setnonblocking(int fd);
 extern void addfd(int epollfd, int fd);
 extern void modfd(int epollfd, int fd, int ev);
@@ -27,24 +26,31 @@ int Server::signal_fd_[2] = {0, 0};
 Server::Server(string listen_ip, int listen_port, string path_resource, int time_out_ms)
     : listen_ip_(listen_ip), listen_port_(listen_port), time_out_ms_(time_out_ms)
 {
-    path_resource_ = path_resource;
+    debug("Server::Server(string, int, string, int)", BEGIN);
+    char *path = NULL;
+    path = getcwd(NULL, 0);
+    path_resource_ =  path + path_resource;
+    free(path);
+    debug("Server::Server(string, int, string, int)", END);
 }
 
 Server::~Server()
 {
-    cout << "in server destructor" << endl;
+    debug("Server::~Server()", BEGIN);
     stop_server_ = true;
     close(listen_fd_);
     close(epoll_fd_);
     for (pair<const int, HttpConn> connection: connections)
     {
-        printf("close %d\n", connection.first);
         close(connection.first);
+        debug("fd " + to_string(connection.first) + " closed");
     }
+    debug("Server::~Server()", END);
 }
 
 void Server::run()
 {
+    debug("Server::run()", BEGIN);
     listen_fd_ = socket(PF_INET, SOCK_STREAM, 0);
     assert(listen_fd_ > 0);
     struct linger tmp = {1, 0};
@@ -81,12 +87,12 @@ void Server::run()
 
     while(!stop_server_)
     {
-        cout << "wait epoll" << endl;
+        debug("wait epoll");
         int number = epoll_wait(epoll_fd_, epoll_events_, MAX_EVENT_NUMBER, -1);
         /* 如果epoll_wait出错，且不是因为需要再次尝试(EAGAIN)或捕获信号(EINTR) */
         if (number < 0 && errno != EAGAIN && errno != EINTR)
         {
-            printf("epoll failure, errno: %d\n", errno);
+            debug("epoll failure, errno: " + to_string(errno));
             break;
         }
 
@@ -95,14 +101,13 @@ void Server::run()
             int fd = epoll_events_[i].data.fd;
             if (fd == listen_fd_)
             {
-
-                cout << "get listen" << endl;
+                debug("get listen");
                 struct sockaddr_in client_address;
                 socklen_t client_addrlength = sizeof(client_address);
                 int conn_fd = accept(listen_fd_, (struct sockaddr *) &client_address, &client_addrlength);
                 if (conn_fd < 0)
                 {
-                    printf("errno is: %d\n", errno);
+                    debug("errno: " + to_string(errno));
                     continue;
                 }
                 connections[conn_fd].init(conn_fd, client_address, path_resource_);
@@ -118,7 +123,7 @@ void Server::run()
                 {
                     for(int i = 0; i < ret; ++i)
                     {
-                        printf("catch signal %d\n", signals[i]);
+                        debug("catch signal " + to_string(signals[i]));
                         switch(signals[i])
                         {
                             case SIGPIPE:
@@ -127,7 +132,7 @@ void Server::run()
                                 break;
                             case SIGTERM:
                             case SIGINT:
-                                printf("get sig, stop server\n");
+                                debug("get sig, stop server");
                                 stop_server_ = true;
                                 break;
                         }
@@ -140,36 +145,40 @@ void Server::run()
             }
             else if (epoll_events_[i].events & EPOLLIN)
             {
-                printf("%d in\n", fd);
-                printf("read and process\n");
-                // ThreadPool<HttpConn>::get_instance().add_task(&connections[fd]);
-                connections[fd].read_and_process();
+                debug("fd" + to_string(fd) + "trigger EPOLLIN");
+                ThreadPool<HttpConn>::get_instance().add_task(&connections[fd]);
+                // connections[fd].read_and_process();
             }
             else if (epoll_events_[i].events & EPOLLOUT)
             {
-                printf("%d out\n", fd);
+                debug("fd " + to_string(fd) + " trigger EPOLLOUT");
                 connections[fd].write();
             }
         }
         modfd(epoll_fd_, listen_fd_, EPOLLIN);
     }
+
+    debug("Server::run()", END);
 }
 
 void addsig(int sig, void (*sig_handler)(int))
 {
+    debug("addsig(int, void *(int))", BEGIN);
     struct sigaction sa;
     memset(&sa, '\0', sizeof(sa));
     sa.sa_handler = sig_handler;
     sa.sa_flags |= SA_RESTART;
     sigfillset(&sa.sa_mask);
     assert(sigaction(sig, &sa, NULL) != -1);
+    debug("addsig(int, void *(int))", END);
 }
 
 void sig_handler(int sig)
 {
-    printf("\nin sig_handler\n");
+    debug("sig_handler(int)", BEGIN);
     int save_errno = errno;
     int msg = sig;
     send(Server::signal_fd_[1], (char *)&msg, 1, 0);
     errno = save_errno;
+    debug("sig_handler(int)", END);
 }

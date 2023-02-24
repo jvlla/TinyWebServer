@@ -7,13 +7,14 @@
 #include <netinet/in.h>
 #include <sys/uio.h>
 #include <sys/stat.h>
-#include "json.hpp"
+#include "HttpRelatedDefinitions.h"
+#include "../FunctionImplementation/FunctionImplementation.h"
+#include "../FunctionImplementation/json.hpp"
 
 class HttpConn {
 public:
     HttpConn();
     void init(int fd, sockaddr_in address, std::string path_resource);
-    // ---------------------检查一下是不是调用close也调用了umap-------------------------
     void close_conn();
     void read_and_process();
     bool read();
@@ -21,15 +22,11 @@ public:
 
     static int epoll_fd_;  // epoll事件文件描述符
 
-    enum HTTP_CODE {OK_200, BAD_REQUEST_400, FORBIDDEN_403, NOT_FOUND_404
-        , INTERNAL_SERVER_ERROR_500};
 private:
     enum CHECK_STATE {CHECK_HEADER, CHECK_REQUEST_LINE, CHECK_CONTENT};
     enum READ_STATE {READ_INCOMPLETE, READ_COMPLETE, READ_ERROR};
     /* 功能分别为默认的HTTP GET，获取共有多少张图片，上传图片和下载图片 */
-    enum FUNCTION {DEFAULT, COUNT_IMAGE, GET_IMAGE, POST_IMAGE};
-    enum HTTP_METHOD {GET, POST, HEAD, PUT, DELETE, TRACE, OPTIONS, CONNECT, PATCH};
-    enum HTTP_VERSION {HTTP_09, HTTP_10, HTTP_11, HTTP_20};
+    // enum FUNCTION {DEFAULT, COUNT_IMAGE, GET_IMAGE, POST_IMAGE};
     static const std::unordered_map<enum HTTP_CODE, std::string> RESPONSE_ERROR_CODE_TO_CONTENT;
 
     void init();
@@ -39,7 +36,7 @@ private:
     enum READ_STATE parse_header(std::string &line);
     enum READ_STATE parse_request_line(std::string &line);
     enum READ_STATE parse_content();
-    // enum HTTP_CODE process_file();
+    enum HTTP_CODE process_file();
     void process_write();
     void add_response_status_line();
     void add_response_header();
@@ -59,7 +56,6 @@ private:
     /* 用于进行解析的状态变量 */
     enum CHECK_STATE check_state_;                      // 请求头解析状态
     enum HTTP_CODE response_code_;                      // 响应报文状态码
-    enum FUNCTION function_;                            // 应调用哪一功能处理请求
     /* 请求报文有关变量 */
     enum HTTP_METHOD request_method_;                   // http请求方法
     std::string request_url_;                           // http请求URL
@@ -76,8 +72,8 @@ private:
     std::vector<char> write_buffer_;                    // 发送缓存
     std::string request_header_;                        // 请求头，以字符串形式保存
     std::string request_content_;                       // 请求content, 以字符串形式保存
-    nlohmann::json request_content_json_;               // 请求content解析后的json
-    nlohmann::json response_content_json_;              // 响应content序列化前的json
+    nlohmann::json request_json_;               // 请求content解析后的json
+    nlohmann::json response_json_;              // 响应content序列化前的json
     /* 报文变量有关的变量 */
     static const int DEFAULT_READ_BUFFER_SIZE = 2048;   // 读缓存默认大小
     int request_header_size_;                           // 请求头长度
@@ -87,6 +83,7 @@ private:
     bool is_first_read_;                                // 是否首次调用read()，用于函数内部控制
     bool is_first_parse_line_;                          // 是否首次调用parse_line()，用于函数内部控制
     /* 响应报文有关变量 */
+    FunctionImplementation function_implementation_;    // 不同接口对应的功能实现
     char * response_file_;                              // 响应报文中文件的映射内存地址
     struct stat response_file_stat_;                    // 响应报文中文件文件属性结构体
     struct iovec iv_[2];                                // iovec结构体
