@@ -9,6 +9,7 @@
 #include <sys/epoll.h>
 #include "Server.h"
 #include "../HttpConn/HttpConn.h"
+#include "../Pool/ThreadPool.h"
 using namespace std;
 
 enum indent {BEGIN, END, MID};
@@ -145,7 +146,7 @@ void Server::run()
             }
             else if (epoll_events_[i].events & EPOLLIN)
             {
-                debug("fd" + to_string(fd) + "trigger EPOLLIN");
+                debug("fd " + to_string(fd) + " trigger EPOLLIN");
                 ThreadPool<HttpConn>::get_instance().add_task(&connections[fd]);
                 // connections[fd].read_and_process();
             }

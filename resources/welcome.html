@@ -26,10 +26,10 @@
           }
         }
       }
-  
+
       function view() {
         let num = document.getElementById("num").value;
-        if (isNaN(num) || (num %1 != 0 || num <= 0 || num > imageNumberMax)) {
+        if (isNaN(num) || (num % 1 != 0 || num <= 0 || num > imageNumberMax)) {
           alert("请输入1至" + imageNumberMax + "的整数数字");
           return;
         }
@@ -48,6 +48,8 @@
                 'src',
                 res.imageName
               )
+              document.getElementById("uploadIP").value = res.uploadIP;
+              document.getElementById("imageNameOrigional").value = res.imageNameOriginal;
             }
           }
         }
@@ -64,10 +66,9 @@
         var fullName = document.getElementById("file").value;
         var splitName = fullName.split('\\');
         var fileName = splitName[splitName.length - 1];
-        console.log(fileName);
+        // console.log(fileName);
   
         let params = '{"imageName": "' + fileName + '", "image": "' + reader.result + '"}';
-        // console.log(reader.result);
         console.log(params);
         var xml =new XMLHttpRequest();
         xml.open('post', '/POST_IMAGE', true);
@@ -154,10 +155,18 @@ box-shadow:  5px 5px 10px #cecece,
       <span>张图片</span>
       <button onclick="view()">查看</button>
       </div>
-      <div><input type="file" id="file" /><button onclick="add()">添加</button></div>
+      <div>
+        <input type="file" id="file" /><button onclick="add()">添加</button>
+      </div>
       <div class="box">
         <img id ="img" src="" alt="">
         <canvas id="imageCanvas" style="display:none;"></canvas>
+      </div>
+      <div>
+        <span>原始名称:</span>
+        <input id="imageNameOrigional" readonly="readonly" style="width:160px;"/>
+        <span>上传IP:</span>
+        <input id="uploadIP" readonly="readonly" style="width:100px;"/>
       </div>
     </main>
   </div>
@@ -178,10 +187,17 @@ box-shadow:  5px 5px 10px #cecece,
         reader.readAsDataURL(fileData);  // 异步读取文件内容，结果用data:url的字符串形式表示
         /*当读取操作成功完成时调用*/
         reader.onload = function(e) {
-            console.log(e);  // 查看对象
-            console.log(this.result);  // this指向FileReader()对象的实例reader
+            // console.log(e);  // 查看对象
+            // console.log(this.result);  // this指向FileReader()对象的实例reader
             image.setAttribute("src", this.result);
         }
+        
+        var fullName = document.getElementById("file").value;
+        var splitName = fullName.split('\\');
+        var fileName = splitName[splitName.length - 1];
+        // 设置图片名，把图片IP清除
+        document.getElementById("uploadIP").value = "";
+        document.getElementById("imageNameOrigional").value = fileName + ".jpg";
     }
   </script>
 </html>

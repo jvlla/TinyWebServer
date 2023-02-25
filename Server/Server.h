@@ -7,7 +7,7 @@
 #include <memory>
 #include <sys/epoll.h>
 #include "../HttpConn/HttpConn.h"
-#include "../ThreadPool/ThreadPool.h"
+#include "../Pool/ThreadPool.h"
 #include "../Timer/Timer.h"
 
 class Server {
