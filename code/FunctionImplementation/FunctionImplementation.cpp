@@ -18,17 +18,16 @@
 #include "json.hpp"
 #include "base64.h"
 #include "../Pool/SQLConnPool.h"
+#include "../Log/Log.h"
+#include <stdio.h>
 
 using namespace std;
 using json = nlohmann::json;
 
-enum indent {BEGIN, END, MID};
-extern void debug(string str, enum indent indent_change = MID);
 enum HTTP_CODE count_image(struct sockaddr_in address, string path_resource, json &request_json, json &response_json);
 enum HTTP_CODE get_image(struct sockaddr_in address, string path_resource, json &request_json, json &response_json);
 enum HTTP_CODE post_image(struct sockaddr_in address, string path_resource, json &request_json, json &response_json);
 bool do_sql(string sql, MYSQL_RES * &result);
-int get_folder_file_count(string folder_path);
 
 const unordered_map<FunctionImplementation::FUNCTIONS
     , function<enum HTTP_CODE(struct sockaddr_in, string, json &, json &)>> FunctionImplementation::enum_to_function = {
@@ -66,7 +65,7 @@ void FunctionImplementation::clear()
 
 enum HTTP_CODE count_image(struct sockaddr_in address, string path_resource, json &request_json, json &response_json)
 {
-    debug("count_image(string, json &, json &)", BEGIN);
+    log(Log::DEBUG, "[begin] count_image(string, json &, json &)");
     int image_count;
     string sql;
     MYSQL_RES * sql_result;
@@ -75,8 +74,8 @@ enum HTTP_CODE count_image(struct sockaddr_in address, string path_resource, jso
     sql = "select count(*) from image";
     if (!do_sql(sql, sql_result) || mysql_num_rows(sql_result) != 1)
     {
-        debug("error when do sql: " + sql);
-        debug("count_image(string, json &, json &)", END);
+        log(Log::ERROR, "error when do sql: " + sql);
+        log(Log::DEBUG, "[end  ] count_image(string, json &, json &)");
         return INTERNAL_SERVER_ERROR_500;
     }
     sql_row = mysql_fetch_row(sql_result);
@@ -84,15 +83,19 @@ enum HTTP_CODE count_image(struct sockaddr_in address, string path_resource, jso
     image_count = atoi(sql_row[0]);
     response_json["imageCount"] = image_count;
 
-    debug("count_image(string, json &, json &)", END);
+    log(Log::DEBUG, "[end  ] count_image(string, json &, json &)");
     return OK_200;
 }
 
 enum HTTP_CODE get_image(struct sockaddr_in address, string path_resource, json &request_json, json &response_json)
 {
-    debug("get_image(string, json &, json &)", BEGIN);
+    log(Log::DEBUG, "[begin] get_image(string, json &, json &)");
     if (!request_json.contains("imageNumber"))
+    {
+        log(Log::WARN, "json key not found");
+        log(Log::DEBUG, "[end  ] get_image(string, json &, json &)");
         return BAD_REQUEST_400;
+    }
     int image_number;
     string sql;
     MYSQL_RES * sql_result;
@@ -103,12 +106,11 @@ enum HTTP_CODE get_image(struct sockaddr_in address, string path_resource, json 
     
     image_number = request_json["imageNumber"];
     sql = "select image_ip, image_name from image where image_id = " + to_string(image_number);
-    cout << sql << endl;
     /* 利用短路求值先调用do_sql()再判断是否只有一行结果 */
     if (!do_sql(sql, sql_result) || mysql_num_rows(sql_result) != 1)
     {
-        debug("error when do sql: " + sql);
-        debug("get_image(string, json &, json &)", END);
+        log(Log::ERROR, "error when do sql: " + sql);
+        log(Log::DEBUG, "[end  ] get_image(string, json &, json &)");
         return INTERNAL_SERVER_ERROR_500;
     }
     sql_row = mysql_fetch_row(sql_result);
@@ -121,16 +123,17 @@ enum HTTP_CODE get_image(struct sockaddr_in address, string path_resource, json 
     response_json["uploadIP"] = ip_str;
     response_json["imageNameOriginal"] = image_name_original;
 
-    debug("get_image(string, json &, json &)", END);
+    log(Log::DEBUG, "[end  ] get_image(string, json &, json &)");
     return OK_200;
 }
 
 enum HTTP_CODE post_image(struct sockaddr_in address, string path_resource, json &request_json, json &response_json)
 {
-    debug("post_image(string, json &, json &)", BEGIN);
+    log(Log::DEBUG, "[begin] post_image(string, json &, json &)");
     if (!(request_json.contains("imageName") && request_json.contains("image")))
     {
-        debug("post_image(string, json &, json &)", END);
+        log(Log::WARN, "json key not found");
+        log(Log::DEBUG, "[end  ] post_image(string, json &, json &)");
         return BAD_REQUEST_400;
     }
     string image_name = request_json["imageName"];
@@ -142,31 +145,35 @@ enum HTTP_CODE post_image(struct sockaddr_in address, string path_resource, json
     MYSQL_RES * sql_result;
     MYSQL_ROW sql_row;
     string sql = "insert into image(image_ip, image_name) values(" + to_string(address.sin_addr.s_addr) + ", \"" + image_name + "\")";
-    cout << sql << endl;
     if (!do_sql(sql, sql_result))
     {
-        debug("error when do sql: " + sql);
-        debug("get_image(string, json &, json &)", END);
+        log(Log::ERROR, "error when do sql: " + sql);
+        log(Log::DEBUG, "[end  ] get_image(string, json &, json &)");
         return INTERNAL_SERVER_ERROR_500;
     }
-    //-------------------------------可以插一样的---------------------------------
+    // 可以插入同名图片，直接选择最后一张即可
     sql = "select image_id from image where image_ip = " + to_string(address.sin_addr.s_addr)
         + " and image_name = \"" +  image_name + "\"";
-    if (!do_sql(sql, sql_result) || mysql_num_rows(sql_result) != 1)
+    if (!do_sql(sql, sql_result) || mysql_num_rows(sql_result) < 1) // 注意可能不止一条记录
     {
-        debug("error when do sql: " + sql);
-        debug("get_image(string, json &, json &)", END);
+        log(Log::ERROR, "error when do sql: " + sql);
+        log(Log::DEBUG, "[end  ] get_image(string, json &, json &)");
         return INTERNAL_SERVER_ERROR_500;
     }
-    sql_row = mysql_fetch_row(sql_result);
-    image_id = atoi(sql_row[0]);
-    debug("new image id: " + to_string(image_id));
+    // 取最后一行记录
+    uint64_t count = mysql_num_rows(sql_result);
+    do {
+        sql_row = mysql_fetch_row(sql_result);
+    } while (--count > 0);
+    image_id = atoi(sql_row[0]);  // id为最后一张图片id
+    log(Log::INFO, "new image id: " + to_string(image_id));
 
     /* 图片base64解码 */
     image_received = request_json["image"];
     if (image_received.compare(0, 23, "data:image/jpeg;base64,"))
     {
-        debug("post_image(string, json &, json &)", END);
+        log(Log::WARN, "image base64 coding is invalid");
+        log(Log::DEBUG, "[end  ] post_image(string, json &, json &)");
         return BAD_REQUEST_400;
     }
     image_received.erase(0, 23);
@@ -174,22 +181,23 @@ enum HTTP_CODE post_image(struct sockaddr_in address, string path_resource, json
 
     /* 图片写出 */
     of.open(path_resource + "/images/" + to_string(image_id) + ".jpg", ios::out | ios::trunc);
-    if (!of)
+    if (!of.is_open())
     {
-        debug("post_image(string, json &, json &)", END);
+        log(Log::ERROR, "open new image file failed");
+        log(Log::DEBUG, "[end  ] post_image(string, json &, json &)");
         return INTERNAL_SERVER_ERROR_500;
     }
     of << image_decoded;
     of.close();
-    debug("write file successful");
+    log(Log::INFO, "write file successful");
 
-    debug("post_image(string, json &, json &)", END);
+    log(Log::DEBUG, "[end  ] post_image(string, json &, json &)");
     return OK_200;
 }
 
 bool do_sql(string sql, MYSQL_RES * &result)
 {
-    debug("do_sql(string, MYSQL_RES * &)", BEGIN);
+    log(Log::DEBUG, "[begin] do_sql(string, MYSQL_RES * &)");
     MYSQL * conn;
     int ret;
     string ip_str;
@@ -199,34 +207,12 @@ bool do_sql(string sql, MYSQL_RES * &result)
     ret = mysql_real_query(conn, sql.c_str(), sql.size());
     if (ret != 0)
     {
-        debug("do_sql(string, MYSQL_RES * &)", END);
+        log(Log::DEBUG, "[end  ] do_sql(string, MYSQL_RES * &)");
         return false;
     }
     result = mysql_store_result(conn);
     SQLConnPool::get_instance().free_conn(conn);
     
-    debug("do_sql(string, MYSQL_RES * &)", END);
+    log(Log::DEBUG, "[end  ] do_sql(string, MYSQL_RES * &)");
     return true;
-}
-
-int get_folder_file_count(string folder_path)
-{
-    debug("get_folder_file_count()", BEGIN);
-    DIR * dir;
-    struct dirent * dirent;
-    int file_count = 0;
-
-    /* 获取resources/images文件夹下文件数 */
-    dir = opendir(folder_path.c_str());
-    if (dir == NULL)
-    {
-        debug("get_folder_file_count()", END);
-        return -1;
-    }
-    while ((dirent = readdir(dir)) != NULL)
-         if(strcmp(dirent->d_name, ".") != 0 && strcmp(dirent->d_name, "..") != 0)
-            ++file_count;
-
-    debug("get_folder_file_count()", END);
-    return file_count;
 }

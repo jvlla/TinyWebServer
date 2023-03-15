@@ -6,8 +6,8 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
-#include <unistd.h>
 #include <memory>
+#include <unistd.h>
 #include <stdio.h>
 
 template<typename T>
@@ -60,7 +60,7 @@ private:
                     cond_.wait(locker, [](){ return !task_list_.empty() || stop_pool_;});
                     if (stop_pool_)
                         break;
-                                  
+                    
                     T * t = task_list_.front();
                     task_list_.pop_front();
                     --tasks_count_;
