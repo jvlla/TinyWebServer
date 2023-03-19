@@ -20,7 +20,7 @@
           if(xml.readyState == 4){
             if(xml.status == 200){
               let res =JSON.parse(xml.responseText);
-              document.getElementById("imageCount").innerHTML="<b>网慢，别着急，千万别狂点</b><br><br>共有" + res.imageCount + "幅图";
+              document.getElementById("imageCount").innerHTML="<b>网慢，别着急，千万别狂点</b><br><br>共有" + res.imageCount + "张图片";
               imageNumberMax = res.imageCount;
             }
           }
@@ -34,7 +34,7 @@
           return;
         }
         let params = '{"imageNumber":' + num +'}';
-        console.log(params);
+        // console.log(params);
   
         var xml =new XMLHttpRequest();
         xml.open('post', '/GET_IMAGE', true);
@@ -69,7 +69,7 @@
         // console.log(fileName);
   
         let params = '{"imageName": "' + fileName + '", "image": "' + reader.result + '"}';
-        console.log(params);
+        // console.log(params);
         var xml =new XMLHttpRequest();
         xml.open('post', '/POST_IMAGE', true);
         xml.setRequestHeader('Access-Control-Allow-Method', 'POST');

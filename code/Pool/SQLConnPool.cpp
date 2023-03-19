@@ -96,11 +96,10 @@ MYSQL * SQLConnPool::get_conn()
     return conn;
 }
 
-bool SQLConnPool::free_conn(MYSQL * conn)
+void SQLConnPool::free_conn(MYSQL * conn)
 {
     std::unique_lock<std::mutex> locker(mutex_);
     conn_queue_.push(conn);
     cond_.notify_one();
     locker.unlock();
-    return true;
 }

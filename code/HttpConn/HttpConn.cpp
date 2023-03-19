@@ -1,14 +1,10 @@
-#include <string>
-#include <vector>
 #include <algorithm>
 #include <regex>
-#include <cstdlib>
 #include <unistd.h>
-#include <sys/mman.h>
-#include <sys/socket.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
-#include <sys/stat.h>
+#include <sys/mman.h>
+#include <sys/uio.h>
 #include "HttpConn.h"
 #include "../FunctionImplementation/FunctionImplementation.h"
 #include "../FunctionImplementation/json.hpp"
@@ -22,7 +18,6 @@ void removefd(int epollfd, int fd);
 void modfd(int epollfd, int fd, int ev);
 
 /* static成员变量在类定义外进行初始化 */
-int HttpConn::epoll_fd_ = -1;
 const unordered_map<enum HTTP_CODE, string> HttpConn::RESPONSE_ERROR_CODE_TO_CONTENT = {
     {BAD_REQUEST_400, "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Bad Request</title></head>" \
         "<body><p><b>Your request has bad syntax or is inherently impossible to satisfy.\n</b></p></body></html>"},
@@ -42,10 +37,11 @@ HttpConn::HttpConn()
     log(Log::DEBUG, "[end  ] HttpConn::HttpConn()");
 }
 
-void HttpConn::init(int fd, sockaddr_in address, string path_resource)
+void HttpConn::init(int epoll_fd, int socket_fd, sockaddr_in address, std::string path_resource)
 {
     log(Log::DEBUG, "[begin] HttpConn::init(int, sockaddr_in, string)");
-    socket_fd_ = fd;
+    epoll_fd_ = epoll_fd;
+    socket_fd_ = socket_fd;
     address_ = address;
     path_resource_ = path_resource;
     /* 允许端口复用 */
@@ -298,12 +294,16 @@ void HttpConn::write()
 void HttpConn::read_and_process()
 {
     log(Log::DEBUG, "[begin] HttpConn::read_and_process()");
+    if (read())
+        process();
+    log(Log::DEBUG, "[end  ] HttpConn::read_and_process()");
+}
+
+void HttpConn::process()
+{
+    log(Log::DEBUG, "[begin] HttpConn::process()");
     /* 如果未完全读入请求报文，等待下次RPOLLIN事件，继续调用read()函数 */
-    if (!read())
-    {
-        log(Log::DEBUG, "[end  ] HttpConn::read_and_process()");
-        return;
-    }
+    
     log(Log::INFO, "header size: " + to_string(request_header_size_) + " " + to_string(request_header_.size()));
     log(Log::INFO, "content size: " + to_string(request_content_size_) + " " + to_string(request_content_.size()));
     log(Log::DEBUG, "content: \n" + request_content_);
@@ -338,7 +338,7 @@ void HttpConn::read_and_process()
     }
     /* 设置EPOLLOUT事件，等待发送响应报文 */
     modfd(epoll_fd_, socket_fd_, EPOLLOUT);
-    log(Log::DEBUG, "HttpConn::read_and_process()");
+    log(Log::DEBUG, "HttpConn::process()");
 }
 
 enum HttpConn::READ_STATE HttpConn::process_read()
@@ -361,7 +361,7 @@ enum HttpConn::READ_STATE HttpConn::process_read()
             break;  // 跳出while，避免对出错行调用parse_*函数
         }
         if (check_state_ != CHECK_CONTENT)
-            log(Log::INFO, "line:  " + line);
+            log(Log::DEBUG, "line:  " + line);
 
         /* check_state_状态转移在各个parse_*函数中完成 */ 
         switch (check_state_)
@@ -571,7 +571,7 @@ enum HTTP_CODE HttpConn::process_file()
     
     string path_file;
     path_file =  path_resource_ + request_url_;
-    log(Log::INFO, "file name: " + path_file);
+    log(Log::INFO, "name of the file to open: " + path_file);
 
     /* 处理错误情况 */
     if (stat(path_file.data(), &response_file_stat_) < 0)
@@ -747,7 +747,7 @@ void addfd(int epollfd, int fd)
     log(Log::DEBUG, "[begin] addfd(int, int)");
     epoll_event event;
     event.data.fd = fd;
-    event.events = EPOLLIN | EPOLLET | EPOLLRDHUP | EPOLLONESHOT;
+    event.events = EPOLLIN | EPOLLET | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP | EPOLLERR;
     epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
     setnonblocking(fd);
     log(Log::DEBUG, "[end  ] addfd(int, int)");
@@ -766,7 +766,7 @@ void modfd(int epollfd, int fd, int ev)
     log(Log::DEBUG, "[begin] modfd(int, int, int)");
     epoll_event event;
     event.data.fd = fd;
-    event.events = ev | EPOLLET | EPOLLONESHOT | EPOLLRDHUP;
+    event.events = ev | EPOLLET | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP | EPOLLERR;
     epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);
     log(Log::DEBUG, "[end  ] modfd(int, int, int)");
 }

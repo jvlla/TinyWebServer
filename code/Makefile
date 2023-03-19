@@ -1,13 +1,14 @@
-CFLAGS = -std=c++11 -O1 -Wall -g 
+# CFLAGS = -std=c++11 -O1 -Wall -g 
+CFLAGS = -std=c++11 -O3 -Wall
 
-.PHONY: webServer, clean
+.PHONY: webServer
 
 webServer: main.cpp ../bin/Server.o ../bin/HttpConn.o ../bin/FunctionImplementation.o ../bin/base64.o \
-	 ../bin/SQLConnPool.o ../bin/Timer.o ../bin/Log.o
+	 ../bin/SQLConnPool.o ../bin/Log.o
 	g++ $(CFLAGS) -o ../$@ main.cpp ../bin/Server.o ../bin/HttpConn.o ../bin/FunctionImplementation.o ../bin/base64.o \
-		../bin/SQLConnPool.o ../bin/Timer.o ../bin/Log.o -lpthread -lmysqlclient
+		../bin/SQLConnPool.o ../bin/Log.o -lpthread -lmysqlclient
 
-../bin/Server.o: Server/Server.cpp Server/Server.h Pool/ThreadPool.h
+../bin/Server.o: Server/Server.cpp Server/Server.h Pool/ThreadPool.h TimerWheel/TimerWheel.h TimerWheel/TimerWheel.tpp
 	g++ $(CFLAGS) -c -o $@ Server/Server.cpp
 
 ../bin/HttpConn.o: HttpConn/HttpConn.cpp HttpConn/HttpConn.h HttpConn/HttpRelatedDefinitions.h
@@ -23,12 +24,5 @@ webServer: main.cpp ../bin/Server.o ../bin/HttpConn.o ../bin/FunctionImplementat
 ../bin/SQLConnPool.o: Pool/SQLConnPool.cpp Pool/SQLConnPool.h
 	g++ $(CFLAGS) -c -o $@ Pool/SQLConnPool.cpp
 
-../bin/Timer.o: Timer/Timer.cpp Timer/Timer.h
-	g++ $(CFLAGS) -c -o $@ Timer/Timer.cpp
-
 ../bin/Log.o: Log/Log.cpp Log/Log.h
 	g++ $(CFLAGS) -c -o $@ Log/Log.cpp
-
-clean:
-	rm -rf ../webServer
-	rm -rf ../../bin ../log

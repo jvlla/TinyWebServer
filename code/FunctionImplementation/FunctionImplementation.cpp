@@ -1,25 +1,16 @@
-#include <iostream>
-#include <stdio.h>
-
 #include <fstream>
-#include <stdlib.h>
-#include <unistd.h>
+#include <mysql/mysql.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <fcntl.h>
 #include <dirent.h>
-#include <sys/mman.h>
-#include <dirent.h>
-#include <mysql/mysql.h>
 #include "FunctionImplementation.h"
 #include "json.hpp"
 #include "base64.h"
 #include "../Pool/SQLConnPool.h"
 #include "../Log/Log.h"
-#include <stdio.h>
 
 using namespace std;
 using json = nlohmann::json;
@@ -30,7 +21,7 @@ enum HTTP_CODE post_image(struct sockaddr_in address, string path_resource, json
 bool do_sql(string sql, MYSQL_RES * &result);
 
 const unordered_map<FunctionImplementation::FUNCTIONS
-    , function<enum HTTP_CODE(struct sockaddr_in, string, json &, json &)>> FunctionImplementation::enum_to_function = {
+    , function<enum HTTP_CODE(struct sockaddr_in, string, json &, json &)>> FunctionImplementation::enum_to_function_ = {
     {COUNT_IMAGE, count_image},
     {GET_IMAGE, get_image},
     {POST_IMAGE, post_image}
@@ -55,7 +46,7 @@ enum FunctionImplementation::FUNCTIONS FunctionImplementation::get_function()
 
 enum HTTP_CODE FunctionImplementation::call(struct sockaddr_in address, string path_resource, json &request_json, json &response_json)
 {
-    return enum_to_function.at(function_)(address, path_resource, request_json, response_json);
+    return enum_to_function_.at(function_)(address, path_resource, request_json, response_json);
 }
 
 void FunctionImplementation::clear()
@@ -104,7 +95,13 @@ enum HTTP_CODE get_image(struct sockaddr_in address, string path_resource, json 
     string ip_str;
     string image_name_original;
     
-    image_number = request_json["imageNumber"];
+    try {
+        image_number = request_json["imageNumber"];
+    } catch(...) {
+        log(Log::WARN, "error when parse a number \"imageNumber\" in json");
+        log(Log::DEBUG, "[end  ] get_image(string, json &, json &)");
+        return BAD_REQUEST_400;
+    }
     sql = "select image_ip, image_name from image where image_id = " + to_string(image_number);
     /* 利用短路求值先调用do_sql()再判断是否只有一行结果 */
     if (!do_sql(sql, sql_result) || mysql_num_rows(sql_result) != 1)
